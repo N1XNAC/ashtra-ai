@@ -1,0 +1,14 @@
+fastapi==0.116.1
+uvicorn[standard]==0.35.0
+sqlalchemy==2.0.43
+pydantic==2.11.7
+pydantic-settings==2.10.1
+python-jose[cryptography]==3.5.0
+passlib[bcrypt]==1.7.4
+python-multipart==0.0.20
+httpx==0.28.1
+sse-starlette==3.0.2
+qdrant-client==1.15.1
+numpy==2.2.6
+# optional, upgrades semantics when installed:
+# sentence-transformers==3.3.1

@@ -1,0 +1,9 @@
+# Never bake secrets or local state into the image.
+.env
+*.db
+qdrant_data/
+local_model/
+uploads/
+graph_data/
+__pycache__/
+*.pyc

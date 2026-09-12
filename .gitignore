@@ -1,0 +1,25 @@
+# Secrets — NEVER commit real keys
+.env
+*.env
+!.env.example
+
+# Local state (rebuilds / persists on server volumes, not in git)
+*.db
+*.db-journal
+qdrant_data/
+local_model/
+uploads/
+graph_data/
+__pycache__/
+*.pyc
+
+# Vendored build cache (re-clone if needed)
+engine/
+
+# Frontend build
+frontend/node_modules/
+frontend/dist/
+
+# OS / editor
+.DS_Store
+*.log

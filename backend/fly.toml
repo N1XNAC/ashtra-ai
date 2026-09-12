@@ -1,0 +1,30 @@
+# Ashtra AI backend on Fly.io free-ish tier.
+# Usage: fly launch (reuse this file) → fly volumes create ashtra_data → set secrets → fly deploy
+app = 'ashtra-backend'
+primary_region = 'bom'
+
+[build]
+
+[http_service]
+  internal_port = 8000
+  force_https = true
+  auto_stop_machines = 'stop'
+  auto_start_machines = true
+  min_machines_running = 0
+
+[[vm]]
+  size = 'shared-cpu-1x'
+  memory = '512mb'
+
+# Persistent disk: SQLite + Qdrant vector index survive restarts/sleeps.
+[[mounts]]
+  source = 'ashtra_data'
+  destination = '/data'
+
+[env]
+  DATABASE_URL = 'sqlite:////data/ashtra_prod.db'
+  QDRANT_PATH = '/data/qdrant_data'
+  DOCS_ENABLED = '0'
+# Secrets (set via `fly secrets set ...`, never commit):
+# GROQ_API_KEY, GROQ_MODEL, VISION_BASE_URL, VISION_API_KEY, VISION_MODEL,
+# API_KEY, SECRET_KEY, CORS_ORIGINS=https://<your-vercel-app>.vercel.app

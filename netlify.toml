@@ -1,0 +1,18 @@
+# Ashtra frontend on Netlify (free tier).
+# Env vars (Site settings → Environment variables): VITE_API_URL, VITE_API_KEY
+[build]
+  base = "frontend/"
+  command = "npm run build"
+  publish = "frontend/dist/"
+
+# SPA fallback (client-side views)
+[[redirects]]
+  from = "/*"
+  to = "/index.html"
+  status = 200
+
+# Cache immutable hashed assets
+[[headers]]
+  for = "/assets/*"
+  [headers.values]
+    Cache-Control = "public, max-age=31536000, immutable"
