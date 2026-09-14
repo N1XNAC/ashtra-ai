@@ -38,11 +38,6 @@ class Settings(BaseSettings):
     chat_rate_limit_per_minute: int = 20  # POST /chat, per user_id (LLM spend)
     max_message_length: int = 4000      # hard cap on chat input chars
     docs_enabled: bool = True           # set DOCS_ENABLED=0 to hide /docs + /openapi.json
-    # Phase 2: vector memory. Dev default = embedded local Qdrant (no server).
-    # Prod: set QDRANT_URL (+ QDRANT_API_KEY) for server/cluster.
-    qdrant_url: str = ""
-    qdrant_api_key: str = ""
-    qdrant_path: str = "./qdrant_data"
     # Phase 5: local custom model. Chain is OpenAI → local checkpoint → echo.
     # Set LOCAL_MODEL_ENABLED=0 to skip local inference.
     local_model_enabled: bool = True

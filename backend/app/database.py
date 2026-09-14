@@ -1,4 +1,4 @@
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, text
 from sqlalchemy.orm import sessionmaker, declarative_base
 from .config import settings
 
@@ -12,12 +12,25 @@ def normalize_url(url: str) -> str:
     return url
 
 
+def normalize_url(url: str) -> str:
+    """Accept Supabase-style URLs: postgres:// -> postgresql+psycopg2://."""
+    if url.startswith("postgres://"):
+        url = "postgresql://" + url[len("postgres://"):]
+    if url.startswith("postgresql://") and "+" not in url.split("://")[0]:
+        url = "postgresql+psycopg2://" + url[len("postgresql://"):]
+    return url
+
 DATABASE_URL = normalize_url(settings.database_url)
 connect_args = {"check_same_thread": False} if DATABASE_URL.startswith("sqlite") else {}
-engine = create_engine(DATABASE_URL, connect_args=connect_args,
-                       pool_pre_ping=True)  # recycle dead pooled conns (free PG sleeps)
+engine = create_engine(DATABASE_URL, connect_args=connect_args, pool_pre_ping=True)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()
+
+# pgvector extension (idempotent — safe on any Postgres instance)
+if not DATABASE_URL.startswith("sqlite"):
+    with engine.connect() as _c:
+        _c.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
+        _c.commit()
 
 def get_db():
     db = SessionLocal()

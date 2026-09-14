@@ -74,8 +74,8 @@ npm run dev
   "search for …", upload then "analyze file x.py"
 
 Upgrade semantics: set OPENAI_BASE_URL+KEY (.env) or `pip install sentence-transformers`.
-Prod vectors: set QDRANT_URL (+QDRANT_API_KEY).
-
+Prod memory: Postgres with pgvector (see backend/.env). Set DATABASE_URL to a Postgres URL
+and `CREATE EXTENSION vector;` once, then `POST /memories/{user}/reindex` to backfill.
 Privacy (DATA_PRIVACY_RULES.txt): memories are transparent, soft-delete, exportable.
 
 ## Host it free (Fly.io backend + Vercel frontend)
@@ -97,7 +97,6 @@ fly deploy          # → https://ashtra-backend.fly.dev/health
 # VITE_API_URL=https://ashtra-backend.fly.dev VITE_API_KEY=<same API_KEY>
 ```
 Notes: first request after idle takes ~30–60s (cold start on shared CPU).
-Free quotas (Groq ~30/min, OpenRouter ~50/day) are shared by all visitors.
 
 ## Safety (anti-abuse)
 - Binds to `127.0.0.1` only — not reachable from the network. Never use `--host 0.0.0.0` on a dev box.
@@ -108,4 +107,4 @@ Free quotas (Groq ~30/min, OpenRouter ~50/day) are shared by all visitors.
   `X-API-Key` (frontend: `VITE_API_KEY` in `frontend/.env`). `/health` stays public.
 - Security headers on every response; `/health` never leaks keys.
 - `DOCS_ENABLED=0` hides `/docs` + `/openapi.json`. See `backend/.env.example`.
-Next: Phase 2 vector memory (Qdrant) + retrieval.
+Next: none — full roadmap P1–P6 complete.

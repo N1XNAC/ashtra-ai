@@ -23,6 +23,12 @@ services:
         value: inclusionai/ling-3.0-flash-vl:free,google/gemma-4-26b-a4b-it:free
       - key: DATABASE_URL
         sync: false # Supabase → Project Settings → Database → connection string (pooler, sslmode=require)
+      # Memory: pure SQL/pgvector — no Qdrant needed. Enable if you had it:
+      # - supabase dashboard → SQL Editor → CREATE EXTENSION vector;
+      # - then POST /memories/{user}/reindex to backfill embeddings.
+      # Or keep local (ephemeral) by leaving DATABASE_URL unset.
+      - key: GROQ_API_KEY
+      - key: POSTGRES_URL
       - key: GROQ_API_KEY
         sync: false
       - key: VISION_API_KEY

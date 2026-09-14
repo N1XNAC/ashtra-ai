@@ -8,8 +8,7 @@ passlib[bcrypt]==1.7.4
 python-multipart==0.0.20
 httpx==0.28.1
 sse-starlette==3.0.2
-qdrant-client==1.15.1
-numpy==2.2.6
+psycopg2-binary==2.9.10
 # Postgres (Supabase free tier) — only needed when DATABASE_URL is postgresql://
 psycopg2-binary==2.9.10
 # optional, upgrades semantics when installed:

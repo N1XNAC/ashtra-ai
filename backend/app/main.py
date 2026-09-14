@@ -1,4 +1,5 @@
 from fastapi import FastAPI
+from sqlalchemy import text
 from fastapi.middleware.cors import CORSMiddleware
 from .database import Base, engine, ensure_phase3_columns
 from . import models  # noqa: F401 — register tables
@@ -10,6 +11,10 @@ from .services.ai_core import active_provider
 
 Base.metadata.create_all(bind=engine)
 ensure_phase3_columns()
+# pgvector extension (idempotent — safe on any Postgres instance)
+with engine.connect() as _c:
+    _c.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
+    _c.commit()
 
 app = FastAPI(title="Ashtra AI — Phase 6",
               docs_url="/docs" if settings.docs_enabled else None,

@@ -69,6 +69,7 @@ class Memory(Base):
     content = Column(Text, nullable=False)
     importance = Column(String, default="medium")  # low | medium | high
     memory_type = Column(String, default="long_term")  # short_term | long_term | episodic | behaviour
+    embedding = Column(Text)  # pgvector — exact nearest-neighbor search
     is_active = Column(Boolean, default=True)
     created_at = Column(DateTime, default=datetime.utcnow)
 

@@ -1,78 +1,73 @@
-"""Phase 2 vector store — Qdrant.
+"""Phase 2 vector store — replaced Qdrant with pure SQL/pgvector.
 
-Dev default: embedded local mode at ./qdrant_data (no server needed).
-Prod: set QDRANT_URL (+ QDRANT_API_KEY) to use a server/cluster.
-
-Collection: ashtra_memories
-Payload: {memory_id, user_id, kind, content, memory_type, importance}
+Collection: ashtray_memories → memories table (embedding column, user_id index).
+Payload stored as JSON columns (kind, content, memory_type, importance).
+Exact nearest-neighbor search via pgvector <-> operator.
 """
-from functools import lru_cache
-from qdrant_client import QdrantClient
-from qdrant_client.models import Distance, VectorParams, Filter, FieldCondition, MatchValue, PointStruct
 import uuid as uuidlib
+from sqlalchemy import text
 
-COLLECTION = "ashtray_memories"
+from ..database import SessionLocal, engine
+from ..config import settings
 
-_client = None
-_client_dim = None
+TABLE = "memories"
+VEC_DIM = 384
 
-def _settings():
-    try:
-        from ..config import settings
-        return settings
-    except Exception:
-        return None
+def _client():
+    return SessionLocal()
 
-def get_client():
-    global _client, _client_dim
-    if _client is not None:
-        return _client
-    s = _settings()
-    url = getattr(s, "qdrant_url", "") if s else ""
-    api_key = getattr(s, "qdrant_api_key", "") if s else ""
-    path = getattr(s, "qdrant_path", "./qdrant_data") if s else "./qdrant_data"
-    if url:
-        _client = QdrantClient(url=url, api_key=api_key or None)
-    else:
-        _client = QdrantClient(path=path)
-    return _client
-
-def ensure_collection(dim: int):
-    c = get_client()
-    try:
-        info = c.get_collection(COLLECTION)
-        if info.config.params.vectors.size != dim:
-            c.recreate_collection(COLLECTION, vectors_config=VectorParams(size=dim, distance=Distance.COSINE))
-    except Exception:
-        c.recreate_collection(COLLECTION, vectors_config=VectorParams(size=dim, distance=Distance.COSINE))
+def ensure_collection(dim: int = VEC_DIM):
+    """Create the extension + embedding column if missing (idempotent)."""
+    with engine.connect() as conn:
+        conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
+        if engine.dialect.name == "sqlite":
+            existing = {r[1] for r in conn.execute(text(f"PRAGMA table_info({TABLE})"))}
+            if "embedding" not in existing:
+                conn.execute(text(f"ALTER TABLE {TABLE} ADD COLUMN embedding TEXT"))
+                conn.commit()
+        conn.close()
 
 def upsert_memory(memory_id: str, user_id: str, vector: list[float], payload: dict):
-    c = get_client()
     ensure_collection(len(vector))
-    c.upsert(COLLECTION, points=[PointStruct(
-        id=str(uuidlib.uuid5(uuidlib.NAMESPACE_URL, memory_id)),
-        vector=vector,
-        payload={"memory_id": memory_id, "user_id": user_id, **payload},
-    )])
+    db = _client()
+    try:
+        db.execute(text(
+            f"INSERT INTO {TABLE} (id, user_id, kind, content, importance, memory_type, embedding) "
+            f"VALUES (:id, :user_id, :kind, :content, :importance, :memory_type, :embedding) "
+            f"ON CONFLICT (id) DO UPDATE SET kind=EXCLUDED.kind, content=EXCLUDED.content, "
+            f"importance=EXCLUDED.importance, memory_type=EXCLUDED.memory_type, embedding=EXCLUDED.embedding"),
+            {"id": str(uuidlib.uuid5(uuidlib.NAMESPACE_URL, memory_id)),
+             "user_id": user_id,
+             "kind": payload.get("kind", ""), "content": payload.get("content", ""),
+             "importance": payload.get("importance", "medium"),
+             "memory_type": payload.get("memory_type", "long_term"),
+             "embedding": vector})
+        db.commit()
+    finally:
+        db.close()
 
 def search_memories(user_id: str, vector: list[float], top_k: int = 5) -> list[dict]:
-    c = get_client()
-    ensure_collection(len(vector))
+    db = _client()
     try:
-        hits = c.query_points(
-            COLLECTION,
-            query=vector,
-            query_filter=Filter(must=[FieldCondition(key="user_id", match=MatchValue(value=user_id))]),
-            limit=top_k,
-        ).points
+        rows = db.execute(text(
+            f"SELECT id, content, kind, embedding <=> :vec AS score "
+            f"FROM {TABLE} "
+            f"WHERE user_id = :user_id AND is_active = true AND embedding IS NOT NULL "
+            f"ORDER BY embedding <=> :vec LIMIT :top_k"),
+            {"user_id": user_id, "vec": vector, "top_k": top_k})
+        return [{"memory_id": r[0], "content": r[1], "kind": r[2], "score": float(r[3])}
+                for r in rows]
     except Exception:
         return []
-    return [{"memory_id": h.payload.get("memory_id"), "content": h.payload.get("content", ""),
-             "kind": h.payload.get("kind", ""), "score": float(h.score)} for h in hits]
+    finally:
+        db.close()
 
 def delete_memory(memory_id: str):
-    c = get_client()
+    db = _client()
     try:
-        c.delete(COLLECTION, points_selector=[str(uuidlib.uuid5(uuidlib.NAMESPACE_URL, memory_id))])
-    except Exception:
-        pass
+        db.execute(text(
+            f"DELETE FROM {TABLE} WHERE id = :id"),
+            {"id": str(uuidlib.uuid5(uuidlib.NAMESPACE_URL, memory_id))})
+        db.commit()
+    finally:
+        db.close()
