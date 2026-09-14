@@ -28,9 +28,6 @@ services:
       # - then POST /memories/{user}/reindex to backfill embeddings.
       # Or keep local (ephemeral) by leaving DATABASE_URL unset.
       - key: GROQ_API_KEY
-      - key: POSTGRES_URL
-      - key: GROQ_API_KEY
-        sync: false
       - key: VISION_API_KEY
         sync: false
       - key: API_KEY
@@ -40,5 +37,5 @@ services:
       - key: CORS_ORIGINS
         sync: false # https://<your-netlify-app>.netlify.app
 # Notes: free tier sleeps after 15 min idle (~30–60s wake).
-# Qdrant index + uploads are ephemeral here — after a cold start, hit
+# Postgres (Supabase) + pgvector survive cold starts. After a cold start, hit
 # POST /memories/{user}/reindex once to rebuild vectors from Postgres.
