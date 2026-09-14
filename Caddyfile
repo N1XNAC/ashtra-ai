@@ -1,0 +1,7 @@
+{
+  # your domain — point its A record at the VM's public IP first
+  your-domain.com {
+    reverse_proxy backend:8000
+    encode gzip
+  }
+}

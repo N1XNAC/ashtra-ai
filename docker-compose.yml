@@ -1,0 +1,45 @@
+# Ashtra AI — actual 24/7 deploy (Oracle Always Free VM).
+# frontend/ is already on Netlify; this compose runs the backend persistently
+# with SQLite + Qdrant on a named volume (survives restarts).
+#
+# On the Oracle VM:
+#   scp -r .env backend netlify.toml compose + Caddy steps below
+#   docker compose up -d            # backend
+#   (Caddy steps are for https://your-domain)
+services:
+  backend:
+    build: ./backend
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8000:8000" # only localhost; Caddy (or tunnel) exposes it
+    volumes:
+      - ashtra_data:/data
+    environment:
+      # Persisted on volume — not in git. Set via backend/.env on the server.
+      DATABASE_URL: "sqlite:////data/ashtra_prod.db"
+      QDRANT_PATH: "/data/qdrant_data"
+      DOCS_ENABLED: "0"
+    env_file:
+      - ./backend/.env # GROQ_*, VISION_*, API_KEY, SECRET_KEY, CORS_ORIGINS
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=5)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+  # Optional: HTTPS for your-domain.com (uncomment after pointing DNS).
+  # caddy:
+  #   image: caddy:2-alpine
+  #   restart: unless-stopped
+  #   ports:
+  #     - "80:80"
+  #     - "443:443"
+  #   volumes:
+  #     - ./Caddyfile:/etc/caddy/Caddyfile:ro
+  #     - caddy_data:/data
+  #     - caddy_config:/config
+
+volumes:
+  ashtra_data:
+  # caddy_data:
+  # caddy_config:
