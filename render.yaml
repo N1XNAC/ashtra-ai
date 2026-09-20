@@ -21,18 +21,6 @@ services:
         value: https://openrouter.ai/api/v1
       - key: VISION_MODEL
         value: inclusionai/ling-3.0-flash-vl:free,google/gemma-4-26b-a4b-it:free
-      - key: DATABASE_URL
-        sync: false # Supabase → Project Settings → Database → connection string
-      - key: GROQ_API_KEY
-        sync: false
-      - key: VISION_API_KEY
-        sync: false
-      - key: API_KEY
-        sync: false
-      - key: SECRET_KEY
-        sync: false
-      - key: CORS_ORIGINS
-        sync: false
 # Notes: free tier sleeps after 15 min idle (~30–60s wake).
 # Postgres (Supabase) + pgvector survive cold starts. After a cold start, hit
 # POST /memories/{user}/reindex once to rebuild vectors from Postgres.
