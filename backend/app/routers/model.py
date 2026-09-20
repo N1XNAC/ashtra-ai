@@ -14,9 +14,6 @@ from sqlalchemy.orm import Session
 from typing import Optional
 from ..database import get_db
 from .. import models
-from ..services.local_model import trainer, inference
-from ..services.local_model.corpus import build_texts
-from ..services.local_model.tokenizer import Tokenizer
 from ..config import settings
 
 router = APIRouter(tags=["model"])
@@ -60,6 +57,8 @@ class TrainIn(BaseModel):
 
 @router.get("/model/dataset")
 def dataset_preview(user_id: Optional[str] = None, db: Session = Depends(get_db)):
+    from ..services.local_model.corpus import build_texts
+    from ..services.local_model.tokenizer import Tokenizer
     texts, info = build_texts(db, user_id)
     tok = Tokenizer.build(texts)
     lens = sorted(len(tok.encode(t)) for t in texts)
@@ -71,6 +70,7 @@ def dataset_preview(user_id: Optional[str] = None, db: Session = Depends(get_db)
 
 @router.post("/model/train")
 def train_model(t: TrainIn, db: Session = Depends(get_db)):
+    from ..services.local_model import trainer
     meta = trainer.train(db, user_id=t.user_id, steps=max(10, min(t.steps, 2000)),
                          lr=t.lr, base=settings.local_model_dir, fine_tune=False)
     return meta
@@ -78,6 +78,7 @@ def train_model(t: TrainIn, db: Session = Depends(get_db)):
 
 @router.post("/model/fine-tune")
 def fine_tune_model(t: TrainIn, db: Session = Depends(get_db)):
+    from ..services.local_model import trainer
     meta = trainer.train(db, user_id=t.user_id, steps=max(10, min(t.steps, 2000)),
                          lr=min(t.lr, 0.003), base=settings.local_model_dir, fine_tune=True)
     return meta
@@ -85,6 +86,7 @@ def fine_tune_model(t: TrainIn, db: Session = Depends(get_db)):
 
 @router.get("/model/status")
 def model_status():
+    from ..services.local_model import trainer
     return trainer.status(base=settings.local_model_dir)
 
 
@@ -96,8 +98,9 @@ class GenIn(BaseModel):
 
 @router.post("/model/generate")
 def model_generate(g: GenIn):
+    from ..services.local_model import inference
     text = inference.generate(g.prompt, max_new=max(1, min(g.max_new, 100)),
-                              temperature=g.temperature, base=settings.local_model_dir)
+                               temperature=g.temperature, base=settings.local_model_dir)
     if text is None:
         return {"ok": False, "hint": "No checkpoint yet, master — POST /model/train first."}
     return {"ok": True, "text": text}
