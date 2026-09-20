@@ -7,7 +7,6 @@ pydantic-settings<2
 # passlib[bcrypt]==1.7.4  # requires bcrypt compilation — add after deploy
 python-multipart==0.0.20
 httpx==0.28.1
-sse-starlette==3.0.2
 # numpy  # not needed at startup, local_model is lazy-imported
 psycopg2-binary  # add when DATABASE_URL is postgresql://
 # optional, upgrades semantics when installed:
