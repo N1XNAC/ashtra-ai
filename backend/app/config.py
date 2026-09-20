@@ -1,8 +1,15 @@
 from pydantic_settings import BaseSettings
+from pydantic import model_validator
 
 class Settings(BaseSettings):
     app_name: str = "Ashtra AI"
     database_url: str = "sqlite:///./ashtray_dev.db"
+
+    @model_validator(mode="after")
+    def ensure_database_url(self) -> "Settings":
+        if not self.database_url:
+            self.database_url = "sqlite:///./ashtray_dev.db"
+        return self
     # Phase 1: pluggable AI. Set OPENAI_BASE_URL + OPENAI_API_KEY for real model,
     # else falls back to echo adapter (local dev, no key needed).
     openai_base_url: str = ""
