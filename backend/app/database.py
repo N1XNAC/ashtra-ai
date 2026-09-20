@@ -9,20 +9,28 @@ def normalize_url(url: str) -> str:
         url = "postgresql://" + url[len("postgres://"):]
     if url.startswith("postgresql://") and "+" not in url.split("://")[0]:
         url = "postgresql+psycopg2://" + url[len("postgresql://"):]
+    if url.startswith("postgresql+psycopg2://") and "sslmode" not in url:
+        url += "?sslmode=require"
     return url
 
 
 DATABASE_URL = normalize_url(settings.database_url or "sqlite:///./ashtray_dev.db")
-connect_args = {"check_same_thread": False} if DATABASE_URL.startswith("sqlite") else {}
+connect_args = {"check_same_thread": False} if DATABASE_URL.startswith("sqlite") else {"connect_timeout": 5}
 engine = create_engine(DATABASE_URL, connect_args=connect_args)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()
 
 # pgvector extension (idempotent — safe on any Postgres instance)
+# Wrapped so a temporarily unreachable DB (e.g. IPv6-only direct URL from
+# an IPv4-only host) doesn't crash the app at import time. The Supabase
+# fix is to use the Shared pooler session-mode URL (IPv4).
 if not DATABASE_URL.startswith("sqlite"):
-    with engine.connect() as _c:
-        _c.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
-        _c.commit()
+    try:
+        with engine.connect() as _c:
+            _c.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
+            _c.commit()
+    except Exception as e:
+        print(f"WARNING: pgvector extension check skipped (DB unreachable): {e}")
 
 def get_db():
     db = SessionLocal()

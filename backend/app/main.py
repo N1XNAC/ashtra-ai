@@ -9,13 +9,22 @@ from .security import (
     GlobalRateLimitMiddleware, ApiKeyMiddleware, SecurityHeadersMiddleware)
 from .services.ai_core import active_provider
 
-Base.metadata.create_all(bind=engine)
-ensure_phase3_columns()
+try:
+    Base.metadata.create_all(bind=engine)
+except Exception as e:
+    print(f"WARNING: create_all skipped (DB unreachable): {e}")
+try:
+    ensure_phase3_columns()
+except Exception as e:
+    print(f"WARNING: ensure_phase3_columns skipped (DB unreachable): {e}")
 # pgvector extension (idempotent — safe on any Postgres instance)
 if not engine.dialect.name == "sqlite":
-    with engine.connect() as _c:
-        _c.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
-        _c.commit()
+    try:
+        with engine.connect() as _c:
+            _c.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
+            _c.commit()
+    except Exception as e:
+        print(f"WARNING: pgvector extension check skipped (DB unreachable): {e}")
 
 app = FastAPI(title="Ashtra AI — Phase 6",
               docs_url="/docs" if settings.docs_enabled else None,
