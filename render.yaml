@@ -1,6 +1,6 @@
 # Ashtra backend on Render free tier (no card) + Supabase free Postgres (no card).
 # Dashboard: New → Blueprint → pick repo (render.yaml auto-detected).
-# Then set the sync:false vars below in the dashboard before first deploy.
+# Then set the 6 secret envVars below in the dashboard after first deploy.
 services:
   - type: web
     name: ashtra-backend
