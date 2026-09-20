@@ -9,7 +9,7 @@ services:
     plan: free
     envVars:
       - key: DOCS_ENABLED
-        value: 0
+        value: "0"
       - key: GROQ_MODEL
         value: openai/gpt-oss-20b
       - key: VISION_BASE_URL
