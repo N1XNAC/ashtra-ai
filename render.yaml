@@ -3,7 +3,7 @@ services:
     name: ashtra-backend
     runtime: python
     rootDir: backend
-    buildCommand: CARGO_HOME=/tmp/cargo pip install -r requirements.txt --only-binary :all:
+    buildCommand: pip install -r requirements.txt
     startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT --workers 1
     healthCheckPath: /health
     plan: free
