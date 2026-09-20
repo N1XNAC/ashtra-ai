@@ -12,14 +12,6 @@ def normalize_url(url: str) -> str:
     return url
 
 
-def normalize_url(url: str) -> str:
-    """Accept Supabase-style URLs: postgres:// -> postgresql+psycopg2://."""
-    if url.startswith("postgres://"):
-        url = "postgresql://" + url[len("postgres://"):]
-    if url.startswith("postgresql://") and "+" not in url.split("://")[0]:
-        url = "postgresql+psycopg2://" + url[len("postgresql://"):]
-    return url
-
 DATABASE_URL = normalize_url(settings.database_url)
 connect_args = {"check_same_thread": False} if DATABASE_URL.startswith("sqlite") else {}
 engine = create_engine(DATABASE_URL, connect_args=connect_args, pool_pre_ping=True)
