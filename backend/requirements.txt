@@ -9,6 +9,6 @@ pyyaml==6.0.2
 python-multipart==0.0.20
 httpx==0.28.1
 # numpy  # not needed at startup, local_model is lazy-imported
-# psycopg2-binary  # add when DATABASE_URL is postgresql://
+psycopg2-binary
 # optional, upgrades semantics when installed:
 # sentence-transformers==3.3.1
