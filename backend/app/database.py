@@ -12,7 +12,7 @@ def normalize_url(url: str) -> str:
     return url
 
 
-DATABASE_URL = normalize_url(settings.database_url)
+DATABASE_URL = normalize_url(settings.database_url or "sqlite:///./ashtray_dev.db")
 connect_args = {"check_same_thread": False} if DATABASE_URL.startswith("sqlite") else {}
 engine = create_engine(DATABASE_URL, connect_args=connect_args)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
