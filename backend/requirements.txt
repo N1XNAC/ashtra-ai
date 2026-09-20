@@ -1,8 +1,8 @@
 fastapi==0.116.1
 uvicorn==0.35.0
 sqlalchemy==2.0.43
-pydantic
-pydantic-settings==2.10.1
+pydantic<2
+pydantic-settings<2
 # python-jose[cryptography]==3.5.0  # requires cryptography compilation — add after deploy
 # passlib[bcrypt]==1.7.4  # requires bcrypt compilation — add after deploy
 python-multipart==0.0.20
