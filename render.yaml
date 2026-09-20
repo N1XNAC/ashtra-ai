@@ -1,6 +1,3 @@
-# Ashtra backend on Render free tier (no card) + Supabase free Postgres (no card).
-# Dashboard: New → Blueprint → pick repo (render.yaml auto-detected).
-# Then set the 6 secret envVars below in the dashboard after first deploy.
 services:
   - type: web
     name: ashtra-backend
@@ -21,6 +18,3 @@ services:
         value: https://openrouter.ai/api/v1
       - key: VISION_MODEL
         value: inclusionai/ling-3.0-flash-vl:free,google/gemma-4-26b-a4b-it:free
-# Notes: free tier sleeps after 15 min idle (~30–60s wake).
-# Postgres (Supabase) + pgvector survive cold starts. After a cold start, hit
-# POST /memories/{user}/reindex once to rebuild vectors from Postgres.
