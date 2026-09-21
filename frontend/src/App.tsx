@@ -27,10 +27,13 @@ async function api(path: string, opts?: RequestInit) {
   return r.json()
 }
 async function throwFor(r: Response): Promise<never> {
-  let msg = `Request failed (${r.status})`
-  try { const j = await r.json(); if (j?.detail) msg = typeof j.detail === 'string' ? j.detail : msg } catch { /* ignore */ }
-  if (r.status === 429) msg = 'Slow down, master — rate limit hit. Try again shortly.'
-  if (r.status === 401) msg = 'Backend needs an API key (set VITE_API_KEY).'
+  let raw = ''
+  try { raw = await r.text() } catch { /* ignore */ }
+  let detail = raw.slice(0, 300)
+  try { const j = JSON.parse(raw); if (typeof j?.detail === 'string') detail = j.detail } catch { /* keep raw */ }
+  let msg = `Request failed (HTTP ${r.status}): ${detail || '(empty body)'}`
+  if (r.status === 429) msg = `Slow down, master — rate limit hit (429). Try again shortly. Body: ${detail || '(empty)'}`
+  if (r.status === 401) msg = `Backend needs an API key (401): ${detail || 'check VITE_API_KEY matches Render API_KEY'}`
   if (r.status === 502) msg = msg + ' (vision link not configured — see backend/.env.example)'
   throw new ApiError(r.status, msg, r.headers.get('Retry-After'))
 }
