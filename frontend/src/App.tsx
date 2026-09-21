@@ -349,6 +349,7 @@ function Chat({ convId, sessKey, sess, patchSess, onNewConv, refreshSidebar }: {
               <Icon name="plus" size={18} />
             </button>
             <textarea
+              id="ashtra-composer" name="message"
               ref={taRef} rows={1} value={input} maxLength={MAXLEN + 100}
               onChange={e => { patchSess(sessKey, { input: e.target.value }); autosize() }}
               onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send() } }}
