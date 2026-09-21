@@ -30,7 +30,7 @@ async def _openai_compat_reply(base_url: str, api_key: str, model: str,
             r = await c.post(
                 f"{base_url.rstrip('/')}/chat/completions",
                 headers={"Authorization": f"Bearer {api_key}"},
-                json={"model": model, "messages": messages},
+                json={"model": model, "messages": messages, "max_tokens": 600, "temperature": 0.7},
             )
             r.raise_for_status()
             return r.json()["choices"][0]["message"]["content"]
