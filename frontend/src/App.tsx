@@ -16,7 +16,13 @@ class ApiError extends Error {
 async function api(path: string, opts?: RequestInit) {
   const headers: Record<string, string> = { 'Content-Type': 'application/json' }
   if (API_KEY) headers['X-API-Key'] = API_KEY
-  const r = await fetch(API + path, { ...opts, headers: { ...headers, ...(opts?.headers as Record<string, string> ?? {}) } })
+  let r: Response
+  try {
+    r = await fetch(API + path, { ...opts, headers: { ...headers, ...(opts?.headers as Record<string, string> ?? {}) }, signal: AbortSignal.timeout(45000) })
+  } catch (e) {
+    if (e instanceof DOMException && e.name === 'TimeoutError') throw new ApiError(0, 'Request timed out after 45s — network stall or sleeping backend. Wait for Render Live and retry.', null)
+    throw new ApiError(0, 'Network failed to fetch — check connection / VPN / adblock.', null)
+  }
   if (!r.ok) await throwFor(r)
   return r.json()
 }
