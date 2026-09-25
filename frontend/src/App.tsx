@@ -379,10 +379,10 @@ function Chat({ convId, sessKey, sess, patchSess, onNewConv, refreshSidebar, onD
 }
 
 /* ---------- sidebar ---------- */
-function Sidebar({ view, setView, convId, setConvId, convs, busyIds, onNew, onDelete, open, close, fx, onToggleFx }: {
+function Sidebar({ view, setView, convId, setConvId, convs, onNew, onDelete, open, close, fx, onToggleFx }: {
   view: View; setView: (v: View) => void
   convId: string | null; setConvId: (id: string | null) => void
-  convs: Conv[]; busyIds: string[]; onNew: () => void; onDelete: (id: string) => void
+  convs: Conv[]; onNew: () => void; onDelete: (id: string) => void
   open: boolean; close: () => void; fx: boolean; onToggleFx: () => void
 }) {
   const [q, setQ] = useState('')
@@ -401,9 +401,7 @@ function Sidebar({ view, setView, convId, setConvId, convs, busyIds, onNew, onDe
             <button key={c.id} className={`conv${convId === c.id && view === 'chat' ? ' on' : ''}`}
               onClick={() => { if (c.id === '__draft') return; setConvId(c.id); setView('chat'); close() }}>
               <span className="t">{c.title || 'New conversation'}</span>
-              {busyIds.includes(c.id)
-                ? <span className="spin" title="Ashtra is working here…" />
-                : <span className="del" onClick={e => { e.stopPropagation(); onDelete(c.id) }}><Icon name="trash" size={15} /></span>}
+              <span className="del" onClick={e => { e.stopPropagation(); onDelete(c.id) }}><Icon name="trash" size={15} /></span>
             </button>
           ))}
           {rows.length === 0 && <div className="sect">No chats yet</div>}
@@ -644,7 +642,9 @@ export default function App() {
 
   const sessKey = convId ?? 'new'
   const sess = sessions[sessKey] ?? blankSess()
-  const busyIds = Object.keys(sessions).filter(k => sessions[k].busy)
+  /* chats (other than the one viewed) still working in background */
+  const busyOthers = Object.entries(sessions).filter(([k, s]) => s.busy && k !== sessKey)
+  const busyTitle = (k: string) => convs.find(c => c.id === k)?.title || (k === 'new' ? 'new chat' : 'another chat')
   /* a fresh draft chat becomes real: carry its session over to the new id */
   function onNewConv(id: string) {
     setSessions(s => {
@@ -663,7 +663,7 @@ export default function App() {
   return (
     <div className={fx ? 'ash' : 'ash no-fx'}>
       <Sidebar view={view} setView={setView} convId={convId} setConvId={setConvId}
-        convs={convs} busyIds={busyIds} onNew={() => { if (sessions['new']?.busy) return; setConvId(null); setView('chat') }} onDelete={(id) => setConfirmDel(id)}
+        convs={convs} onNew={() => { if (sessions['new']?.busy) return; setConvId(null); setView('chat') }} onDelete={(id) => setConfirmDel(id)}
         open={sideOpen} close={() => setSideOpen(false)} fx={fx} onToggleFx={toggleFx} />
       <div className="main">
         <div className="topbar">
@@ -675,6 +675,16 @@ export default function App() {
         </div>
         {view === 'chat' && <Chat key={sessKey} convId={convId} sessKey={sessKey} sess={sess}
           patchSess={patchSess} onNewConv={onNewConv} refreshSidebar={refreshConvs} onDraft={addDraftConv} />}
+        {view === 'chat' && busyOthers.length > 0 && (
+          <button className="workpill" onClick={() => {
+            const k = busyOthers[0][0]
+            setConvId(k === 'new' || k === '__draft' ? null : k); setView('chat')
+          }}>
+            <span className="dot" />
+            Ashtra is working in {busyTitle(busyOthers[0][0])}
+            {busyOthers.length > 1 ? ` (+${busyOthers.length - 1})` : ''}…
+          </button>
+        )}
         {view === 'memory' && <MemoryPanel />}
         {view === 'goals' && <GoalsPanel />}
         {view === 'you' && <YouPanel />}

@@ -386,3 +386,6 @@ input[type="range"] { width: 100%; accent-color: var(--accent); }
 .no-fx * { transition-duration: .01ms !important; }
 /* web image results in chat */
 .chatimg { max-width: 100%; border-radius: 12px; margin: 6px 6px 6px 0; max-height: 260px; object-fit: cover; }
+/* background-work pill: tap to jump to the working chat */
+.workpill { position: fixed; bottom: 96px; left: 50%; transform: translateX(-50%); display: flex; align-items: center; gap: 8px; padding: 10px 16px; border-radius: 999px; border: 1px solid rgba(255,255,255,.14); background: rgba(20,20,24,.92); color: #fff; font-size: 13px; cursor: pointer; z-index: 40; box-shadow: 0 8px 24px rgba(0,0,0,.45); max-width: 92vw; }
+.workpill .dot { width: 8px; height: 8px; border-radius: 50%; background: #4ade80; animation: tp 1.2s infinite; flex: none; }
