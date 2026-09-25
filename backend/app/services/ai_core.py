@@ -26,8 +26,6 @@ async def _openai_compat_reply(base_url: str, api_key: str, model: str,
     messages += history[-6:]
     messages.append({"role": "user", "content": user_message})
     payload: dict = {"model": model, "messages": messages, "max_tokens": 600, "temperature": 0.7}
-    if "qwen3" in model:
-        payload["enable_thinking"] = False
     try:
         async with httpx.AsyncClient(timeout=60) as c:
             r = await c.post(
