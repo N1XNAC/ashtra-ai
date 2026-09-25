@@ -64,6 +64,16 @@ const PATHS: Record<string, ReactNode> = {
   calendar: (<><rect x="3" y="4" width="18" height="18" rx="2" /><path d="M16 2v4M8 2v4M3 10h18" /></>),
   plus: (<><path d="M12 5v14M5 12h14" /></>),
   image: (<><rect x="3" y="3" width="18" height="18" rx="2" /><circle cx="9" cy="9" r="2" /><path d="m21 15-5-5L5 21" /></>),
+  search: (<><circle cx="11" cy="11" r="7" /><path d="m20 20-3.8-3.8" /></>),
+  x: (<><path d="M6 6l12 12M18 6 6 18" /></>),
+  books: (<><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20V4a2 2 0 0 0-2-2H6.5A2.5 2.5 0 0 0 4 4.5v15Z" /><path d="M4 19.5A2.5 2.5 0 0 0 6.5 22H20v-5" /><path d="M9 7h7" /></>),
+  folder: (<><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7Z" /></>),
+  clock: (<><circle cx="12" cy="12" r="9" /><path d="M12 7v5l3 2" /></>),
+  plugin: (<><path d="M9 7V3m6 4V3M7 7h10v5a5 5 0 0 1-10 0V7Z" /><path d="M12 17v4" /></>),
+  terminal: (<><rect x="3" y="4" width="18" height="16" rx="2" /><path d="m7 9 3 3-3 3M12 15h5" /></>),
+  external: (<><path d="M14 4h6v6M20 4 11 13" /><path d="M20 14v5a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2h5" /></>),
+  dots: (<><circle cx="5" cy="12" r="1.4" /><circle cx="12" cy="12" r="1.4" /><circle cx="19" cy="12" r="1.4" /></>),
+  bag: (<><path d="M6 8h12l1 12a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2L6 8Z" /><path d="M9 10V6a3 3 0 0 1 6 0v4" /></>),
 }
 function Icon({ name, size = 17 }: { name: keyof typeof PATHS; size?: number }) {
   return (
@@ -118,7 +128,7 @@ function renderMd(src: string) {
 }
 
 /* ---------- types ---------- */
-type View = 'chat' | 'memory' | 'goals' | 'you'
+type View = 'chat' | 'library' | 'projects' | 'scheduled' | 'plugins' | 'memory' | 'goals' | 'you'
 type Msg = { role: string; content: string; meta?: string; fresh?: boolean; attachment?: string }
 type Conv = { id: string; title: string; created_at?: string }
 /* Per-chat session: drafts, attachments, messages and working state live here,
@@ -386,44 +396,103 @@ function Chat({ convId, sessKey, sess, patchSess, onNewConv, refreshSidebar, onD
 }
 
 /* ---------- sidebar ---------- */
-function Sidebar({ view, setView, convId, setConvId, convs, onNew, onDelete, open, close, fx, onToggleFx }: {
+function Sidebar({ view, setView, onNew, open, close }: {
   view: View; setView: (v: View) => void
-  convId: string | null; setConvId: (id: string | null) => void
-  convs: Conv[]; onNew: () => void; onDelete: (id: string) => void
-  open: boolean; close: () => void; fx: boolean; onToggleFx: () => void
+  onNew: () => void
+  open: boolean; close: () => void
 }) {
-  const [q, setQ] = useState('')
-  const rows = convs.filter(c => !q.trim() || c.title.toLowerCase().includes(q.toLowerCase()))
+  const [moreOpen, setMoreOpen] = useState(false)
+  const go = (v: View) => { setView(v); close() }
+  const row = (label: string, icon: keyof typeof PATHS, active: boolean, onClick: () => void, right?: ReactNode) => (
+    <button key={label} className={`mrow${active ? ' on' : ''}`} onClick={onClick}>
+      <Icon name={icon} size={19} /><span className="t">{label}</span>{right}
+    </button>
+  )
   return (
     <>
       {open && <div className="scrim" onClick={close} />}
       <div className={`side${open ? ' open' : ''}`}>
-        <div className="side-top">
-          <button className="newchat" onClick={() => { onNew(); close() }}><Icon name="pen" size={16} /> New chat</button>
+        <div className="drawer-top">
+          <img src="/logo.png" alt="Ashtra" className="applogo"
+            onError={e => { (e.target as HTMLImageElement).style.display = 'none' }} />
+          <div className="drawer-top-r">
+            <button className="iconbtn" aria-label="Search chats" onClick={() => go('library')}><Icon name="search" size={20} /></button>
+            <button className="iconbtn" aria-label="Close menu" onClick={close}><Icon name="x" size={21} /></button>
+          </div>
         </div>
-        <input className="searchbox" value={q} onChange={e => setQ(e.target.value)} placeholder="Search chats" />
-        <div className="sect">Chats</div>
-        <div className="convlist">
-          {rows.map(c => (
-            <button key={c.id} className={`conv${convId === c.id && view === 'chat' ? ' on' : ''}`}
-              onClick={() => { if (c.id === '__draft') return; setConvId(c.id); setView('chat'); close() }}>
-              <span className="t">{c.title || 'New conversation'}</span>
-              <span className="del" onClick={e => { e.stopPropagation(); onDelete(c.id) }}><Icon name="trash" size={15} /></span>
-            </button>
-          ))}
-          {rows.length === 0 && <div className="sect">No chats yet</div>}
-        </div>
-        <div className="side-foot">
-          <button className={`navbtn${view === 'memory' ? ' on' : ''}`} onClick={() => { setView('memory'); close() }}><Icon name="memory" size={17} /> Memory</button>
-          <button className={`navbtn${view === 'goals' ? ' on' : ''}`} onClick={() => { setView('goals'); close() }}><Icon name="target" size={17} /> Goals</button>
-          <button className={`navbtn${view === 'you' ? ' on' : ''}`} onClick={() => { setView('you'); close() }}><Icon name="user" size={17} /> You</button>
-          <button className="fxtoggle" onClick={onToggleFx} title="Toggle glass + morph effects (low-performance fallback)">
-            <Icon name="sliders" size={15} /> {fx ? 'Effects on' : 'Effects off'}
-          </button>
-          <div className="modeltag"><span className="dot" /> open-source · remembers you</div>
+        <nav className="mnav">
+          {row('New chat', 'pen', view === 'chat', () => { onNew(); close() })}
+          {row('Library', 'books', view === 'library', () => go('library'))}
+          {row('Projects', 'folder', view === 'projects', () => go('projects'),
+            <span className="mright" onClick={e => { e.stopPropagation(); go('projects') }}><Icon name="plus" size={18} /></span>)}
+          {row('Scheduled', 'clock', view === 'scheduled', () => go('scheduled'))}
+          {row('Plugins', 'plugin', view === 'plugins', () => go('plugins'))}
+          <a className="mrow" href="https://github.com/N1XNAC/ashtra-ai" target="_blank" rel="noreferrer" onClick={close}>
+            <Icon name="terminal" size={19} /><span className="t">Codex</span>
+            <span className="mright"><Icon name="external" size={17} /></span>
+          </a>
+          {row('More', 'dots', false, () => setMoreOpen(v => !v))}
+          {moreOpen && (<>
+            {row('Memory', 'memory', view === 'memory', () => go('memory'))}
+            {row('Goals', 'target', view === 'goals', () => go('goals'))}
+            {row('You', 'user', view === 'you', () => go('you'))}
+          </>)}
+        </nav>
+        <div className="drawer-profile">
+          <div className="dp-ava">M</div>
+          <div className="dp-meta"><div className="dp-name">Master</div><div className="dp-sub">Free plan</div></div>
+          <span className="mright"><Icon name="bag" size={19} /></span>
         </div>
       </div>
     </>
+  )
+}
+
+/* ---------- library (conversation history) ---------- */
+function LibraryPanel({ convs, convId, setConvId, setView, onDelete, refresh }: {
+  convs: Conv[]; convId: string | null; setConvId: (id: string | null) => void
+  setView: (v: View) => void; onDelete: (id: string) => void; refresh: () => void
+}) {
+  const [q, setQ] = useState('')
+  useEffect(() => { refresh() }, [])
+  const rows = convs.filter(c => c.id !== '__draft' && (!q.trim() || c.title.toLowerCase().includes(q.toLowerCase())))
+  return (
+    <div className="panel">
+      <h2>Library</h2>
+      <input className="searchbox" autoFocus value={q} onChange={e => setQ(e.target.value)} placeholder="Search chats" />
+      <div className="convlist">
+        {rows.map(c => (
+          <button key={c.id} className={`conv${convId === c.id ? ' on' : ''}`}
+            onClick={() => { setConvId(c.id); setView('chat') }}>
+            <span className="t">{c.title || 'New conversation'}</span>
+            <span className="del" onClick={e => { e.stopPropagation(); onDelete(c.id) }}><Icon name="trash" size={15} /></span>
+          </button>
+        ))}
+        {rows.length === 0 && <div className="sect">No chats yet</div>}
+      </div>
+    </div>
+  )
+}
+
+/* ---------- placeholders ---------- */
+function SoonPanel({ title, body }: { title: string; body: string }) {
+  return (<div className="panel"><h2>{title}</h2><p className="desc">{body}</p></div>)
+}
+
+const PLUGINS: { t: string; d: string }[] = [
+  { t: 'Calculator', d: 'Quick math inside chat.' },
+  { t: 'Notes', d: 'Save and recall notes.' },
+  { t: 'Files', d: 'Attach and read files.' },
+  { t: 'Code', d: 'Run code snippets.' },
+  { t: 'Search', d: 'Look things up on the web.' },
+  { t: 'Calendar', d: 'Events and reminders.' },
+  { t: 'Goals', d: 'Track progress over time.' },
+]
+function PluginsPanel() {
+  return (
+    <div className="panel"><h2>Plugins</h2>
+      {PLUGINS.map(p => (<div key={p.t} className="plugrow"><div className="dp-name">{p.t}</div><div className="dp-sub">{p.d}</div></div>))}
+    </div>
   )
 }
 
@@ -688,13 +757,13 @@ export default function App() {
     setConvId(id)
   }
 
-  const titles: Record<View, string> = { chat: 'Ashtra', memory: 'Memory', goals: 'Goals', you: 'You' }
+  const titles: Record<View, string> = { chat: 'Ashtra', library: 'Library', projects: 'Projects', scheduled: 'Scheduled', plugins: 'Plugins', memory: 'Memory', goals: 'Goals', you: 'You' }
 
   return (
     <div className={fx ? 'ash' : 'ash no-fx'}>
-      <Sidebar view={view} setView={setView} convId={convId} setConvId={setConvId}
-        convs={convs} onNew={() => { if (sessions['new']?.busy) return; setConvId(null); setView('chat') }} onDelete={(id) => setConfirmDel(id)}
-        open={sideOpen} close={() => setSideOpen(false)} fx={fx} onToggleFx={toggleFx} />
+      <Sidebar view={view} setView={setView}
+        onNew={() => { if (sessions['new']?.busy) return; setConvId(null); setView('chat') }}
+        open={sideOpen} close={() => setSideOpen(false)} />
       <div className="main">
         <div className="topbar">
           <button className="burger" onClick={() => setSideOpen(true)} aria-label="Open sidebar"><Icon name="menu" size={22} /></button>
@@ -702,9 +771,14 @@ export default function App() {
             <div className="name">{titles[view]}</div>
             {view === 'chat' && <div className="sub"><span className="dot" /> remembers you</div>}
           </div>
+          <button className="iconbtn topfx" onClick={toggleFx} title="Toggle effects"><Icon name="sliders" size={17} /></button>
         </div>
         {view === 'chat' && <Chat key={sessKey} convId={convId} sessKey={sessKey} sess={sess}
           patchSess={patchSess} onNewConv={onNewConv} refreshSidebar={refreshConvs} onDraft={addDraftConv} />}
+        {view === 'library' && <LibraryPanel convs={convs} convId={convId} setConvId={setConvId} setView={setView} onDelete={(id) => setConfirmDel(id)} refresh={refreshConvs} />}
+        {view === 'projects' && <SoonPanel title="Projects" body="Project workspaces are coming soon." />}
+        {view === 'scheduled' && <SoonPanel title="Scheduled" body="Scheduled tasks will live here." />}
+        {view === 'plugins' && <PluginsPanel />}
         {view === 'chat' && busyOthers.length > 0 && (
           <button className="workpill" onClick={() => {
             const k = busyOthers[0][0]

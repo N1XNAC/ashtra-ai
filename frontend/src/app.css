@@ -389,3 +389,23 @@ input[type="range"] { width: 100%; accent-color: var(--accent); }
 /* background-work pill: tap to jump to the working chat */
 .workpill { position: fixed; bottom: 96px; left: 50%; transform: translateX(-50%); display: flex; align-items: center; gap: 8px; padding: 10px 16px; border-radius: 999px; border: 1px solid rgba(255,255,255,.14); background: rgba(20,20,24,.92); color: #fff; font-size: 13px; cursor: pointer; z-index: 40; box-shadow: 0 8px 24px rgba(0,0,0,.45); max-width: 92vw; }
 .workpill .dot { width: 8px; height: 8px; border-radius: 50%; background: #4ade80; animation: tp 1.2s infinite; flex: none; }
+/* ---------- app drawer (menu spec) ---------- */
+.side { background: #000; }
+.drawer-top { display: flex; align-items: center; padding: 6px 4px 14px; }
+.applogo { width: 32px; height: 32px; object-fit: contain; }
+.drawer-top-r { margin-left: auto; display: flex; gap: 4px; }
+.mnav { display: flex; flex-direction: column; gap: 6px; padding: 0 8px; }
+.mrow { display: flex; align-items: center; gap: 16px; width: 100%; padding: 13px 14px; border: 0; border-radius: 20px; background: transparent; color: #f5f5f5; font-size: 16px; cursor: pointer; text-decoration: none; text-align: left; min-height: 52px; }
+.mrow .t { flex: 1; }
+.mrow.on { background: #2b2b2d; color: #fff; }
+.mrow .mright, .mright { margin-left: auto; display: flex; color: #d4d4d4; }
+.drawer-profile { margin-top: auto; border-top: 1px solid #262626; padding: 12px 14px 4px; display: flex; align-items: center; gap: 12px; }
+.dp-ava { width: 34px; height: 34px; border-radius: 50%; background: #2b2b2d; color: #fff; display: flex; align-items: center; justify-content: center; font-size: 15px; flex: none; }
+.dp-meta { flex: 1; min-width: 0; }
+.dp-name { color: #fff; font-size: 14px; }
+.dp-sub { color: #8a8a8a; font-size: 12px; }
+.plugrow { padding: 12px 2px; border-bottom: 1px solid #222; }
+.topfx { margin-left: auto; }
+@media (max-width: 760px) {
+  .side { width: min(90vw, 340px); background: #000; border-right: 0; -webkit-backdrop-filter: none; backdrop-filter: none; }
+}
