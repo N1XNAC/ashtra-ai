@@ -409,3 +409,15 @@ input[type="range"] { width: 100%; accent-color: var(--accent); }
 @media (max-width: 760px) {
   .side { width: min(90vw, 340px); background: #000; border-right: 0; -webkit-backdrop-filter: none; backdrop-filter: none; }
 }
+/* ---------- drawer search + responsive ---------- */
+.side { max-height: 100dvh; }
+.drawer-search { display: flex; align-items: center; gap: 10px; margin: 4px 8px 2px; padding: 12px 16px; border-radius: 999px; background: #1c1c1e; color: #8a8a8a; }
+.drawer-search input { flex: 1; min-width: 0; border: 0; outline: 0; background: transparent; color: #fff; font-size: 15px; }
+.drawer-search input::placeholder { color: #6e6e6e; }
+.mnav, .convlist { overflow-y: auto; min-height: 0; }
+.convlist { flex: 1; }
+@media (max-width: 380px) {
+  .mrow { min-height: 48px; padding: 11px 12px; font-size: 15px; }
+  .applogo { width: 30px; height: 30px; }
+  .dp-ava { width: 30px; height: 30px; }
+}

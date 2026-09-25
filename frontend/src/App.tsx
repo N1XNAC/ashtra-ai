@@ -396,18 +396,21 @@ function Chat({ convId, sessKey, sess, patchSess, onNewConv, refreshSidebar, onD
 }
 
 /* ---------- sidebar ---------- */
-function Sidebar({ view, setView, onNew, open, close }: {
+function Sidebar({ view, setView, convId, setConvId, convs, onNew, onDelete, open, close, onStore }: {
   view: View; setView: (v: View) => void
-  onNew: () => void
-  open: boolean; close: () => void
+  convId: string | null; setConvId: (id: string | null) => void
+  convs: Conv[]; onNew: () => void; onDelete: (id: string) => void
+  open: boolean; close: () => void; onStore: () => void
 }) {
   const [moreOpen, setMoreOpen] = useState(false)
+  const [q, setQ] = useState('')
   const go = (v: View) => { setView(v); close() }
-  const row = (label: string, icon: keyof typeof PATHS, active: boolean, onClick: () => void, right?: ReactNode) => (
+  const row = (label: string, icon: keyof typeof PATHS, active: boolean, onClick: () => void) => (
     <button key={label} className={`mrow${active ? ' on' : ''}`} onClick={onClick}>
-      <Icon name={icon} size={19} /><span className="t">{label}</span>{right}
+      <Icon name={icon} size={19} /><span className="t">{label}</span>
     </button>
   )
+  const rows = convs.filter(c => c.id !== '__draft' && (!q.trim() || c.title.toLowerCase().includes(q.toLowerCase())))
   return (
     <>
       {open && <div className="scrim" onClick={close} />}
@@ -416,21 +419,12 @@ function Sidebar({ view, setView, onNew, open, close }: {
           <img src="/logo.png" alt="Ashtra" className="applogo"
             onError={e => { (e.target as HTMLImageElement).style.display = 'none' }} />
           <div className="drawer-top-r">
-            <button className="iconbtn" aria-label="Search chats" onClick={() => go('library')}><Icon name="search" size={20} /></button>
             <button className="iconbtn" aria-label="Close menu" onClick={close}><Icon name="x" size={21} /></button>
           </div>
         </div>
         <nav className="mnav">
           {row('New chat', 'pen', view === 'chat', () => { onNew(); close() })}
-          {row('Library', 'books', view === 'library', () => go('library'))}
-          {row('Projects', 'folder', view === 'projects', () => go('projects'),
-            <span className="mright" onClick={e => { e.stopPropagation(); go('projects') }}><Icon name="plus" size={18} /></span>)}
           {row('Scheduled', 'clock', view === 'scheduled', () => go('scheduled'))}
-          {row('Plugins', 'plugin', view === 'plugins', () => go('plugins'))}
-          <a className="mrow" href="https://github.com/N1XNAC/ashtra-ai" target="_blank" rel="noreferrer" onClick={close}>
-            <Icon name="terminal" size={19} /><span className="t">Codex</span>
-            <span className="mright"><Icon name="external" size={17} /></span>
-          </a>
           {row('More', 'dots', false, () => setMoreOpen(v => !v))}
           {moreOpen && (<>
             {row('Memory', 'memory', view === 'memory', () => go('memory'))}
@@ -438,10 +432,24 @@ function Sidebar({ view, setView, onNew, open, close }: {
             {row('You', 'user', view === 'you', () => go('you'))}
           </>)}
         </nav>
+        <div className="drawer-search"><Icon name="search" size={16} />
+          <input value={q} onChange={e => setQ(e.target.value)} placeholder="Search" aria-label="Search chats" />
+        </div>
+        <div className="sect">Recent chats</div>
+        <div className="convlist">
+          {rows.map(c => (
+            <button key={c.id} className={`conv${convId === c.id && view === 'chat' ? ' on' : ''}`}
+              onClick={() => { setConvId(c.id); setView('chat'); close() }}>
+              <span className="t">{c.title || 'New conversation'}</span>
+              <span className="del" onClick={e => { e.stopPropagation(); onDelete(c.id) }}><Icon name="trash" size={15} /></span>
+            </button>
+          ))}
+          {rows.length === 0 && <div className="sect">No chats yet</div>}
+        </div>
         <div className="drawer-profile">
           <div className="dp-ava">M</div>
-          <div className="dp-meta"><div className="dp-name">Master</div><div className="dp-sub">Free plan</div></div>
-          <span className="mright"><Icon name="bag" size={19} /></span>
+          <div className="dp-meta"><div className="dp-name">Master</div></div>
+          <button className="iconbtn" aria-label="Store" onClick={onStore}><Icon name="bag" size={19} /></button>
         </div>
       </div>
     </>
@@ -674,6 +682,7 @@ export default function App() {
   const [convs, setConvs] = useState<Conv[]>([])
   const [sideOpen, setSideOpen] = useState(false)
   const [confirmDel, setConfirmDel] = useState<string | null>(null)
+  const [storePop, setStorePop] = useState(false)
   /* session store: one entry per chat, survives switching + page reloads */
   const [sessions, setSessions] = useState<Record<string, Sess>>(() => {
     try {
@@ -712,15 +721,9 @@ export default function App() {
       return n
     })
   }
-  const [fx, setFx] = useState(() => {
+  const [fx] = useState(() => {
     try { return localStorage.getItem('ashtra-fx') !== 'off' } catch { return true }
   })
-  function toggleFx() {
-    setFx(v => {
-      try { localStorage.setItem('ashtra-fx', v ? 'off' : 'on') } catch { /* ignore */ }
-      return !v
-    })
-  }
 
   async function refreshConvs() {
     try { setConvs(await api(`/chat/conversations/${USER}`)) } catch { /* offline */ }
@@ -761,9 +764,9 @@ export default function App() {
 
   return (
     <div className={fx ? 'ash' : 'ash no-fx'}>
-      <Sidebar view={view} setView={setView}
-        onNew={() => { if (sessions['new']?.busy) return; setConvId(null); setView('chat') }}
-        open={sideOpen} close={() => setSideOpen(false)} />
+      <Sidebar view={view} setView={setView} convId={convId} setConvId={setConvId}
+        convs={convs} onNew={() => { if (sessions['new']?.busy) return; setConvId(null); setView('chat') }} onDelete={(id) => setConfirmDel(id)}
+        open={sideOpen} close={() => setSideOpen(false)} onStore={() => setStorePop(true)} />
       <div className="main">
         <div className="topbar">
           <button className="burger" onClick={() => setSideOpen(true)} aria-label="Open sidebar"><Icon name="menu" size={22} /></button>
@@ -771,7 +774,6 @@ export default function App() {
             <div className="name">{titles[view]}</div>
             {view === 'chat' && <div className="sub"><span className="dot" /> remembers you</div>}
           </div>
-          <button className="iconbtn topfx" onClick={toggleFx} title="Toggle effects"><Icon name="sliders" size={17} /></button>
         </div>
         {view === 'chat' && <Chat key={sessKey} convId={convId} sessKey={sessKey} sess={sess}
           patchSess={patchSess} onNewConv={onNewConv} refreshSidebar={refreshConvs} onDraft={addDraftConv} />}
@@ -797,6 +799,11 @@ export default function App() {
         <ConfirmDialog title="Delete this chat?" body="The conversation and its messages will be removed."
           confirmLabel="Delete" onCancel={() => setConfirmDel(null)}
           onConfirm={() => { const id = confirmDel; setConfirmDel(null); delConv(id) }} />
+      )}
+      {storePop && (
+        <ConfirmDialog title="Store" body="Coming soon."
+          confirmLabel="OK" onCancel={() => setStorePop(false)}
+          onConfirm={() => setStorePop(false)} />
       )}
     </div>
   )
