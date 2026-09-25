@@ -263,13 +263,14 @@ function Chat({ convId, sessKey, sess, patchSess, onNewConv, refreshSidebar }: {
     }
     try {
       const j = await post('/chat', { user_id: USER, conversation_id: convId, message: content, image_context })
+      const targetKey = !convId ? j.conversation_id : key
       if (!convId) { onNewConv(j.conversation_id); refreshSidebar() }
       const meta: string[] = []
       if (sawImage) meta.push('saw image')
       if (j.sources?.length) meta.push(`recalled ${j.sources.length}`)
       if (j.tool_calls?.length) meta.push('used ' + j.tool_calls.map((c: { tool: string }) => c.tool).join(', '))
       if (j.adaptations_made?.length) meta.push('adapted')
-      patchSess(key, {
+      patchSess(targetKey, {
         msgs: [...base, userMsg, { role: 'assistant', content: j.reply, meta: meta.join(' · ') || undefined, fresh: true }],
         busy: false, busyLabel: '',
       })
