@@ -175,11 +175,18 @@ function Chat({ convId, sessKey, sess, patchSess, onNewConv, refreshSidebar, onD
   const { msgs: cached, input, busy, busyLabel, err, attach } = sess
   const msgs = cached ?? []
   const [morph, setMorph] = useState(false) /* gooey send-button stretch, one shot per send */
+  const [phase, setPhase] = useState(0) /* rotating status while busy */
+  const PHASES = ['Thinking', 'Recalling memories', 'Drafting reply', 'Polishing']
   const bottomRef = useRef<HTMLDivElement>(null)
   const taRef = useRef<HTMLTextAreaElement>(null)
   const fileRef = useRef<HTMLInputElement>(null)
 
   useEffect(() => { bottomRef.current?.scrollIntoView({ behavior: 'smooth' }) }, [cached, busy])
+  useEffect(() => {
+    if (!busy) { setPhase(0); return }
+    const t = setInterval(() => setPhase(p => (p + 1) % 4), 4000)
+    return () => clearInterval(t)
+  }, [busy])
 
   /* Hydrate once per session: store is truth; API only when never loaded.
      Late API replies are cancelled so fast chat-hopping can't cross-pollinate. */
@@ -244,7 +251,7 @@ function Chat({ convId, sessKey, sess, patchSess, onNewConv, refreshSidebar, onD
     let image_context: string | undefined
     let sawImage = false
     if (img) {
-      patchSess(key, { busyLabel: 'Seeing image…' })
+      patchSess(key, { busyLabel: 'Analyzing image…' })
       try {
         const form = new FormData()
         form.append('user_id', USER)
@@ -338,7 +345,7 @@ function Chat({ convId, sessKey, sess, patchSess, onNewConv, refreshSidebar, onD
               <div className="avatar">A</div>
               <div className="body">
                 <div className="typing"><i /><i /><i /></div>
-                {busyLabel && <div className="lab" style={{ marginTop: 2 }}>{busyLabel}</div>}
+                <div className="lab" style={{ marginTop: 2 }}>{busyLabel || `${PHASES[phase]}…`}</div>
               </div>
             </div>
           )}
