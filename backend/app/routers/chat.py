@@ -66,7 +66,7 @@ async def chat(req: schemas.ChatRequest, request: Request, db: Session = Depends
     )
     history = [{"role": m.role, "content": m.content} for m in reversed(history_rows[:-1])]
 
-    relevant = memory_engine.retrieve_relevant(user.id, req.message, top_k=5)
+    relevant = memory_engine.retrieve_relevant(user.id, req.message, top_k=3)
     memory_context = "\n".join(f"- [{h['kind']}] {h['content']}" for h in relevant if h.get("content"))
 
     # --- Phase 4: planner → tools (runs before reply; results join the context) ---

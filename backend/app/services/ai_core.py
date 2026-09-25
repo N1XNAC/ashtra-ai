@@ -23,7 +23,7 @@ async def _openai_compat_reply(base_url: str, api_key: str, model: str,
     if memory_context:
         system += f"\nRelevant memories:\n{memory_context}"
     messages = [{"role": "system", "content": system}]
-    messages += history[-10:]
+    messages += history[-6:]
     messages.append({"role": "user", "content": user_message})
     try:
         async with httpx.AsyncClient(timeout=60) as c:
