@@ -11,6 +11,31 @@ API = "https://commons.wikimedia.org/w/api.php"
 _UA = {"User-Agent": "AshtraAI/1.0 (personal assistant; contact: local)"}
 
 
+def _serper(query: str, limit: int) -> list[dict]:
+    """Serper.dev Google image results (free SERPER_KEY, no card)."""
+    try:
+        from ..config import settings
+        key = (getattr(settings, "serper_key", "") or "").strip()
+    except Exception:
+        key = ""
+    if not key:
+        return []
+    try:
+        r = httpx.post("https://google.serper.dev/images",
+                       headers={"X-API-KEY": key, "Content-Type": "application/json"},
+                       json={"q": query, "num": limit}, timeout=15)
+        r.raise_for_status()
+        out = []
+        for h in (r.json().get("images") or [])[:limit]:
+            url = h.get("imageUrl") or ""
+            if url:
+                out.append({"title": (h.get("title") or query)[:80],
+                            "thumb": url, "page": h.get("link", "")})
+        return out
+    except Exception:
+        return []
+
+
 def _pixabay(query: str, limit: int) -> list[dict]:
     """Pixabay free tier (needs PIXABAY_KEY env). None-safe, [] on failure."""
     try:
@@ -65,12 +90,13 @@ def wants_images(text: str) -> str:
 
 
 def search(query: str, limit: int = 3) -> list[dict]:
-    """Search web images. Pixabay (key) first, Commons fallback."""
+    """Search web images. Serper (Google results) → Pixabay → Commons."""
     if not query:
         return []
-    hit = _pixabay(query, limit)
-    if hit:
-        return hit
+    for fn in (_serper, _pixabay):
+        hit = fn(query, limit)
+        if hit:
+            return hit
     try:
         r = httpx.get(API, params={
             "action": "query", "format": "json",

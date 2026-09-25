@@ -26,8 +26,9 @@ class Settings(BaseSettings):
     # Comma-separated fallback chain: tried in order, so one hot quota
     # doesn't kill the feature. Keep entries to well-behaved (non-reasoning) models.
     vision_model: str = ""
-    # Web image search (free Pixabay key, no card): powers "what does X look
-    # like" photos in chat. Empty = Commons fallback (often bot-blocked).
+    # Web image search: Serper (Google results, free key no card) first,
+    # Pixabay fallback. Empty = Commons fallback (often bot-blocked).
+    serper_key: str = ""
     pixabay_key: str = ""
     secret_key: str = "dev-only-change-me"
     # --- Safety: exposure + abuse protection ---
