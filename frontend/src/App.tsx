@@ -661,7 +661,7 @@ export default function App() {
   return (
     <div className={fx ? 'ash' : 'ash no-fx'}>
       <Sidebar view={view} setView={setView} convId={convId} setConvId={setConvId}
-        convs={convs} busyIds={busyIds} onNew={() => { setConvId(null); setView('chat') }} onDelete={(id) => setConfirmDel(id)}
+        convs={convs} busyIds={busyIds} onNew={() => { if (sessions['new']?.busy) return; setConvId(null); setView('chat') }} onDelete={(id) => setConfirmDel(id)}
         open={sideOpen} close={() => setSideOpen(false)} fx={fx} onToggleFx={toggleFx} />
       <div className="main">
         <div className="topbar">
