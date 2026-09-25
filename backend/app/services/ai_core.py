@@ -34,7 +34,16 @@ async def _openai_compat_reply(base_url: str, api_key: str, model: str,
             )
             r.raise_for_status()
             return r.json()["choices"][0]["message"]["content"]
-    except Exception:
+    except Exception as e:
+        import logging
+        detail = ""
+        try:
+            resp = getattr(e, "response", None)
+            if resp is not None:
+                detail = f" status={resp.status_code} body={resp.text[:200]}"
+        except Exception:
+            pass
+        logging.getLogger("ashtra.llm").warning("llm call failed (%s): %s%s", model, type(e).__name__, detail)
         return None
 
 
