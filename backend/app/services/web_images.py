@@ -61,6 +61,29 @@ def _brave(query: str, limit: int) -> list[dict]:
         return []
 
 
+def _loremflickr(query: str, limit: int) -> list[dict]:
+    """LoremFlickr keyword photos — keyless, practically unlimited."""
+    import urllib.parse
+    q = ",".join(query.lower().split()[:4])
+    if not q:
+        return []
+    seed = abs(hash(query)) % 1000
+    return [{"title": query[:80],
+             "thumb": f"https://loremflickr.com/640/480/{urllib.parse.quote(q)}?lock={seed + i}",
+             "page": "https://loremflickr.com"} for i in range(limit)]
+
+
+def _pollinations(query: str, limit: int) -> list[dict]:
+    """AI-generated image — keyless, unlimited, always available."""
+    import urllib.parse
+    if not query:
+        return []
+    seed = abs(hash(query)) % 1000
+    return [{"title": f"{query} (AI image)".strip()[:80],
+             "thumb": f"https://image.pollinations.ai/prompt/{urllib.parse.quote(query)}?w=640&h=480&seed={seed + i}&nologo=true",
+             "page": ""} for i in range(min(limit, 1))]
+
+
 def _pixabay(query: str, limit: int) -> list[dict]:
     """Pixabay free tier (needs PIXABAY_KEY env). None-safe, [] on failure."""
     try:
@@ -115,36 +138,11 @@ def wants_images(text: str) -> str:
 
 
 def search(query: str, limit: int = 3) -> list[dict]:
-    """Search web images. Serper → Brave → Pixabay → Commons."""
+    """Search web images. Serper → Brave → Pixabay → LoremFlickr → Pollinations → Commons."""
     if not query:
         return []
-    for fn in (_serper, _brave, _pixabay):
+    for fn in (_serper, _brave, _pixabay, _loremflickr, _pollinations):
         hit = fn(query, limit)
         if hit:
             return hit
-    try:
-        r = httpx.get(API, params={
-            "action": "query", "format": "json",
-            "generator": "search", "gsrsearch": f"filetype:bitmap {query}",
-            "gsrnamespace": 6, "gsrlimit": 10,
-            "prop": "imageinfo", "iiprop": "url|extmetadata",
-            "iiurlwidth": 640,
-        }, headers=_UA, timeout=15)
-        r.raise_for_status()
-        pages = (r.json().get("query") or {}).get("pages") or {}
-        out = []
-        for p in pages.values():
-            info = (p.get("imageinfo") or [{}])[0]
-            thumb = info.get("thumburl") or info.get("url") or ""
-            if not thumb:
-                continue
-            if thumb.lower().endswith((".svg", ".tif", ".tiff")):
-                continue
-            out.append({"title": p.get("title", "").replace("File:", ""),
-                        "thumb": thumb,
-                        "page": info.get("descriptionurl", "")})
-            if len(out) >= limit:
-                break
-        return out
-    except Exception:
-        return []
+    return []
