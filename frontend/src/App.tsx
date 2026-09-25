@@ -598,8 +598,31 @@ export default function App() {
   const [convs, setConvs] = useState<Conv[]>([])
   const [sideOpen, setSideOpen] = useState(false)
   const [confirmDel, setConfirmDel] = useState<string | null>(null)
-  /* session store: one entry per chat, survives switching */
-  const [sessions, setSessions] = useState<Record<string, Sess>>({})
+  /* session store: one entry per chat, survives switching + page reloads */
+  const [sessions, setSessions] = useState<Record<string, Sess>>(() => {
+    try {
+      const raw = localStorage.getItem('ashtra-sessions-v1')
+      if (!raw) return {}
+      const data = JSON.parse(raw) as Record<string, { msgs: Msg[] }>
+      const out: Record<string, Sess> = {}
+      for (const [k, v] of Object.entries(data)) {
+        if (k === '__draft' || k === 'new' || !Array.isArray(v?.msgs)) continue
+        out[k] = { ...blankSess(), msgs: v.msgs.slice(-100).map(m => ({ ...m, fresh: false })) }
+      }
+      return out
+    } catch { return {} }
+  })
+  useEffect(() => {
+    try {
+      const keys = Object.keys(sessions).filter(k => k !== '__draft' && k !== 'new').slice(-15)
+      const slim: Record<string, { msgs: Msg[] }> = {}
+      for (const k of keys) {
+        const m = sessions[k]?.msgs
+        if (m && m.length) slim[k] = { msgs: m.slice(-100).map(({ role, content, meta }) => ({ role, content, meta })) }
+      }
+      localStorage.setItem('ashtra-sessions-v1', JSON.stringify(slim))
+    } catch { /* quota — skip */ }
+  }, [sessions])
   function patchSess(key: string, p: Partial<Sess>) {
     setSessions(s => ({ ...s, [key]: { ...(s[key] ?? blankSess()), ...p } }))
   }
