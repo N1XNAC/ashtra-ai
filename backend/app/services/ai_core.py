@@ -25,7 +25,7 @@ async def _openai_compat_reply(base_url: str, api_key: str, model: str,
     messages = [{"role": "system", "content": system}]
     messages += history[-6:]
     messages.append({"role": "user", "content": user_message})
-    payload: dict = {"model": model, "messages": messages, "max_tokens": 600, "temperature": 0.7}
+    payload: dict = {"model": model, "messages": messages, "max_tokens": 300, "temperature": 0.7}
     try:
         async with httpx.AsyncClient(timeout=60) as c:
             r = await c.post(
