@@ -3,7 +3,7 @@ from sqlalchemy import text
 from fastapi.middleware.cors import CORSMiddleware
 from .database import Base, engine, ensure_phase3_columns
 from . import models  # noqa: F401 — register tables
-from .routers import chat, memory, profile, agent, model, graph, vision
+from .routers import chat, memory, profile, agent, model, graph, vision, web
 from .config import settings
 from .security import (
     GlobalRateLimitMiddleware, ApiKeyMiddleware, SecurityHeadersMiddleware)
@@ -48,6 +48,7 @@ app.include_router(profile.router)
 app.include_router(agent.router)
 app.include_router(model.router)
 app.include_router(graph.router)
+app.include_router(web.router)
 
 @app.get("/health")
 def health():

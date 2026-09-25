@@ -384,3 +384,5 @@ input[type="range"] { width: 100%; accent-color: var(--accent); }
 .no-fx .dialog, .no-fx .dialog-scrim, .no-fx .attachrow { animation: none !important; }
 .no-fx .spin { animation: none; border-top-color: rgba(255,255,255,.18); }
 .no-fx * { transition-duration: .01ms !important; }
+/* web image results in chat */
+.chatimg { max-width: 100%; border-radius: 12px; margin: 6px 6px 6px 0; max-height: 260px; object-fit: cover; }

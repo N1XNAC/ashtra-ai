@@ -4,7 +4,7 @@ from ..database import get_db
 from .. import models, schemas
 from ..config import settings
 from ..security import check_rate, client_ip
-from ..services import ai_core, memory_engine, behavior_analyzer, personality_adapter, planner, knowledge_graph
+from ..services import ai_core, memory_engine, behavior_analyzer, personality_adapter, planner, knowledge_graph, web_images
 from ..services import agent as agent_exec
 from ..services.tools import due_reminders
 
@@ -104,6 +104,12 @@ async def chat(req: schemas.ChatRequest, request: Request, db: Session = Depends
     reply = await ai_core.generate_reply(req.message, ctx, history, memory_context, adaptation_text)
     if tool_calls:
         reply = reply.rstrip() + " 🔧[" + ", ".join(c["tool"] for c in tool_calls) + "]"
+    # --- Web images: "what does a banana look like" → inline Commons photos ---
+    _img_q = web_images.wants_images(req.message)
+    _imgs = web_images.search(_img_q) if _img_q else []
+    if _imgs:
+        reply = reply.rstrip() + "\n\n" + "\n".join(
+            f"![{i['title']}]({i['thumb']})" for i in _imgs)
 
     db.add(models.Message(conversation_id=conv.id, role="assistant", content=reply))
 

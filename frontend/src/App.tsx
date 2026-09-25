@@ -83,6 +83,7 @@ function inline(s: string) {
   h = h.replace(/`([^`]+)`/g, '<code>$1</code>')
   h = h.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
   h = h.replace(/(^|[^*\w])\*([^*\n]+)\*/g, '$1<em>$2</em>')
+  h = h.replace(/!\[([^\]]*)\]\((https?:[^)]+)\)/g, '<img src="$2" alt="$1" loading="lazy" class="chatimg" />')
   h = h.replace(/\[([^\]]+)\]\((https?:[^)]+)\)/g, '<a href="$2" target="_blank" rel="noreferrer">$1</a>')
   return h
 }
@@ -270,6 +271,7 @@ function Chat({ convId, sessKey, sess, patchSess, onNewConv, refreshSidebar, onD
       if (sawImage) meta.push('saw image')
       if (j.sources?.length) meta.push(`recalled ${j.sources.length}`)
       if (j.tool_calls?.length) meta.push('used ' + j.tool_calls.map((c: { tool: string }) => c.tool).join(', '))
+      if (/\!\[[^\]]*\]\(https?:/.test(j.reply)) meta.push('images')
       if (j.adaptations_made?.length) meta.push('adapted')
       patchSess(targetKey, {
         msgs: [...base, userMsg, { role: 'assistant', content: j.reply, meta: meta.join(' · ') || undefined, fresh: true }],
