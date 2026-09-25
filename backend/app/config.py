@@ -29,6 +29,7 @@ class Settings(BaseSettings):
     # Web image search: Serper (Google results, free key no card) first,
     # Pixabay fallback. Empty = Commons fallback (often bot-blocked).
     serper_key: str = ""
+    brave_key: str = ""
     pixabay_key: str = ""
     secret_key: str = "dev-only-change-me"
     # --- Safety: exposure + abuse protection ---

@@ -36,6 +36,31 @@ def _serper(query: str, limit: int) -> list[dict]:
         return []
 
 
+def _brave(query: str, limit: int) -> list[dict]:
+    """Brave image search (free BRAVE_KEY, no card)."""
+    try:
+        from ..config import settings
+        key = (getattr(settings, "brave_key", "") or "").strip()
+    except Exception:
+        key = ""
+    if not key:
+        return []
+    try:
+        r = httpx.get("https://api.search.brave.com/res/v1/images/search",
+                      headers={"X-Subscription-Token": key},
+                      params={"q": query, "count": limit}, timeout=15)
+        r.raise_for_status()
+        out = []
+        for h in (r.json().get("results") or [])[:limit]:
+            thumb = ((h.get("thumbnail") or {}).get("src")) or h.get("src") or ""
+            if thumb:
+                out.append({"title": (h.get("title") or query)[:80],
+                            "thumb": thumb, "page": h.get("url", "")})
+        return out
+    except Exception:
+        return []
+
+
 def _pixabay(query: str, limit: int) -> list[dict]:
     """Pixabay free tier (needs PIXABAY_KEY env). None-safe, [] on failure."""
     try:
@@ -90,10 +115,10 @@ def wants_images(text: str) -> str:
 
 
 def search(query: str, limit: int = 3) -> list[dict]:
-    """Search web images. Serper (Google results) → Pixabay → Commons."""
+    """Search web images. Serper → Brave → Pixabay → Commons."""
     if not query:
         return []
-    for fn in (_serper, _pixabay):
+    for fn in (_serper, _brave, _pixabay):
         hit = fn(query, limit)
         if hit:
             return hit
