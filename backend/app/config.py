@@ -31,6 +31,7 @@ class Settings(BaseSettings):
     serper_key: str = ""
     brave_key: str = ""
     pixabay_key: str = ""
+    pexels_key: str = ""
     secret_key: str = "dev-only-change-me"
     # --- Safety: exposure + abuse protection ---
     # Bind uvicorn to 127.0.0.1 (never 0.0.0.0 on a dev box) and keep CORS tight.

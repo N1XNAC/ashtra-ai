@@ -61,6 +61,31 @@ def _brave(query: str, limit: int) -> list[dict]:
         return []
 
 
+def _pexels(query: str, limit: int) -> list[dict]:
+    """Pexels free key (instant signup, no card)."""
+    try:
+        from ..config import settings
+        key = (getattr(settings, "pexels_key", "") or "").strip()
+    except Exception:
+        key = ""
+    if not key:
+        return []
+    try:
+        r = httpx.get("https://api.pexels.com/v1/search",
+                      headers={"Authorization": key},
+                      params={"query": query, "per_page": limit}, timeout=15)
+        r.raise_for_status()
+        out = []
+        for h in (r.json().get("photos") or [])[:limit]:
+            url = ((h.get("src") or {}).get("medium")) or ""
+            if url:
+                out.append({"title": (h.get("alt") or query)[:80],
+                            "thumb": url, "page": h.get("url", "")})
+        return out
+    except Exception:
+        return []
+
+
 def _loremflickr(query: str, limit: int) -> list[dict]:
     """LoremFlickr keyword photos — keyless, practically unlimited."""
     import urllib.parse
@@ -141,7 +166,7 @@ def search(query: str, limit: int = 3) -> list[dict]:
     """Search web images. Serper → Brave → Pixabay → LoremFlickr → Pollinations → Commons."""
     if not query:
         return []
-    for fn in (_serper, _brave, _pixabay, _loremflickr, _pollinations):
+    for fn in (_serper, _brave, _pixabay, _pexels, _loremflickr, _pollinations):
         hit = fn(query, limit)
         if hit:
             return hit
