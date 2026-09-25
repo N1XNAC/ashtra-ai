@@ -415,7 +415,7 @@ function Sidebar({ view, setView, convId, setConvId, convs, busyIds, onNew, onDe
           <button className="fxtoggle" onClick={onToggleFx} title="Toggle glass + morph effects (low-performance fallback)">
             <Icon name="sliders" size={15} /> {fx ? 'Effects on' : 'Effects off'}
           </button>
-          <div className="modeltag"><span className="dot" /> gpt-oss-20b · open-source</div>
+          <div className="modeltag"><span className="dot" /> open-source · remembers you</div>
         </div>
       </div>
     </>
@@ -670,7 +670,7 @@ export default function App() {
           <button className="burger" onClick={() => setSideOpen(true)} aria-label="Open sidebar"><Icon name="menu" size={22} /></button>
           <div>
             <div className="name">{titles[view]}</div>
-            {view === 'chat' && <div className="sub"><span className="dot" /> gpt-oss-20b · remembers you</div>}
+            {view === 'chat' && <div className="sub"><span className="dot" /> remembers you</div>}
           </div>
         </div>
         {view === 'chat' && <Chat key={sessKey} convId={convId} sessKey={sessKey} sess={sess}
