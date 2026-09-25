@@ -390,7 +390,7 @@ input[type="range"] { width: 100%; accent-color: var(--accent); }
 .workpill { position: fixed; bottom: 96px; left: 50%; transform: translateX(-50%); display: flex; align-items: center; gap: 8px; padding: 10px 16px; border-radius: 999px; border: 1px solid rgba(255,255,255,.14); background: rgba(20,20,24,.92); color: #fff; font-size: 13px; cursor: pointer; z-index: 40; box-shadow: 0 8px 24px rgba(0,0,0,.45); max-width: 92vw; }
 .workpill .dot { width: 8px; height: 8px; border-radius: 50%; background: #4ade80; animation: tp 1.2s infinite; flex: none; }
 /* ---------- app drawer (menu spec) ---------- */
-.side { background: #000; }
+.side { background: var(--sidebar); }
 .drawer-top { display: flex; align-items: center; padding: 6px 4px 14px; }
 .applogo { width: 32px; height: 32px; object-fit: contain; }
 .drawer-top-r { margin-left: auto; display: flex; gap: 4px; }
@@ -407,7 +407,7 @@ input[type="range"] { width: 100%; accent-color: var(--accent); }
 .plugrow { padding: 12px 2px; border-bottom: 1px solid #222; }
 .topfx { margin-left: auto; }
 @media (max-width: 760px) {
-  .side { width: min(90vw, 340px); background: #000; border-right: 0; -webkit-backdrop-filter: none; backdrop-filter: none; }
+  .side { width: min(90vw, 340px); background: var(--sidebar); border-right: 0; -webkit-backdrop-filter: none; backdrop-filter: none; }
 }
 /* ---------- drawer search + responsive ---------- */
 .side { max-height: 100dvh; }
@@ -421,3 +421,8 @@ input[type="range"] { width: 100%; accent-color: var(--accent); }
   .applogo { width: 30px; height: 30px; }
   .dp-ava { width: 30px; height: 30px; }
 }
+/* ---------- pill scrollbars, no square outline ---------- */
+.convlist::-webkit-scrollbar, .mnav::-webkit-scrollbar, .thread::-webkit-scrollbar { width: 6px; }
+.convlist::-webkit-scrollbar-track, .mnav::-webkit-scrollbar-track, .thread::-webkit-scrollbar-track { background: transparent; }
+.convlist::-webkit-scrollbar-thumb, .mnav::-webkit-scrollbar-thumb, .thread::-webkit-scrollbar-thumb { background: #3f3f42; border-radius: 999px; border: none; outline: none; }
+.convlist, .mnav, .thread { scrollbar-width: thin; scrollbar-color: #3f3f42 transparent; }
