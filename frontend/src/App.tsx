@@ -166,10 +166,10 @@ const SUGGESTIONS: { t: string; s: string; icon: 'chat' | 'code' | 'calendar' | 
   { t: 'Set a goal', s: 'e.g. add a goal to learn piano', icon: 'target' },
 ]
 
-function Chat({ convId, sessKey, sess, patchSess, onNewConv, refreshSidebar }: {
+function Chat({ convId, sessKey, sess, patchSess, onNewConv, refreshSidebar, onDraft }: {
   convId: string | null; sessKey: string; sess: Sess
   patchSess: (key: string, p: Partial<Sess>) => void
-  onNewConv: (id: string) => void; refreshSidebar: () => void
+  onNewConv: (id: string) => void; refreshSidebar: () => void; onDraft: (title: string) => void
 }) {
   const { msgs: cached, input, busy, busyLabel, err, attach } = sess
   const msgs = cached ?? []
@@ -235,6 +235,7 @@ function Chat({ convId, sessKey, sess, patchSess, onNewConv, refreshSidebar }: {
     if (img) URL.revokeObjectURL(img.url)
     const userMsg: Msg = { role: 'user', content, fresh: true, attachment: img ? img.file.name : undefined }
     patchSess(key, { msgs: [...base, userMsg], input: '', err: '', attach: null, busy: true, busyLabel: '' })
+    if (!convId) onDraft(content)
     if (fileRef.current) fileRef.current.value = ''
     requestAnimationFrame(autosize)
     setMorph(true); setTimeout(() => setMorph(false), 400) /* fire the morph, then settle */
@@ -396,7 +397,7 @@ function Sidebar({ view, setView, convId, setConvId, convs, busyIds, onNew, onDe
         <div className="convlist">
           {rows.map(c => (
             <button key={c.id} className={`conv${convId === c.id && view === 'chat' ? ' on' : ''}`}
-              onClick={() => { setConvId(c.id); setView('chat'); close() }}>
+              onClick={() => { if (c.id === '__draft') return; setConvId(c.id); setView('chat'); close() }}>
               <span className="t">{c.title || 'New conversation'}</span>
               {busyIds.includes(c.id)
                 ? <span className="spin" title="Ashtra is working here…" />
@@ -625,6 +626,11 @@ export default function App() {
   async function refreshConvs() {
     try { setConvs(await api(`/chat/conversations/${USER}`)) } catch { /* offline */ }
   }
+  /* optimistic sidebar entry so a new chat appears instantly, before the AI replies */
+  function addDraftConv(title: string) {
+    setConvs(c => [{ id: '__draft', title: title.slice(0, 40) || 'New conversation' },
+      ...c.filter(x => x.id !== '__draft')])
+  }
   useEffect(() => { refreshConvs() }, [])
 
   async function delConv(id: string) {
@@ -666,7 +672,7 @@ export default function App() {
           </div>
         </div>
         {view === 'chat' && <Chat key={sessKey} convId={convId} sessKey={sessKey} sess={sess}
-          patchSess={patchSess} onNewConv={onNewConv} refreshSidebar={refreshConvs} />}
+          patchSess={patchSess} onNewConv={onNewConv} refreshSidebar={refreshConvs} onDraft={addDraftConv} />}
         {view === 'memory' && <MemoryPanel />}
         {view === 'goals' && <GoalsPanel />}
         {view === 'you' && <YouPanel />}
