@@ -4,7 +4,7 @@ from ..database import get_db
 from .. import models, schemas
 from ..config import settings
 from ..security import check_rate, client_ip
-from ..services import ai_core, memory_engine, behavior_analyzer, personality_adapter, planner, knowledge_graph
+from ..services import ai_core, memory_engine, behavior_analyzer, personality_adapter, planner, knowledge_graph, web_images
 from ..services import agent as agent_exec
 from ..services.tools import due_reminders
 import logging
