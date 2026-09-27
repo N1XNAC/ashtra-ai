@@ -160,7 +160,7 @@ async def generate_reply(user_message: str, profile_context: str = "", history: 
             settings.groq_base_url, settings.groq_api_key, settings.groq_model,
             user_message, profile_context, history, memory_context, adaptation)
         if reply:
-            return reply + " [groq ☁️]"
+            return reply
     # Link 3: local custom transformer (trained via POST /model/train)
     if settings.local_model_enabled:
         try:
