@@ -111,8 +111,7 @@ class Feedback(Base):
 
     user = relationship("User")
 
-class Goal(Base):
-    # Phase 6: goal tracking — dashboard, progress, milestones
+class Goal(Base):    # Phase 6: goal tracking — dashboard, progress, milestones
     __tablename__ = "goals"
     id = Column(String, primary_key=True, default=uid)
     user_id = Column(String, ForeignKey("users.id"), nullable=False)
@@ -122,5 +121,18 @@ class Goal(Base):
     milestones = Column(JSON, default=list)  # [{"title": str, "done": bool}]
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    user = relationship("User")
+
+
+class ScheduledMsg(Base):
+    # Scheduled AI messages: user prompt delivered as a chat reply at run_at.
+    __tablename__ = "scheduled_msgs"
+    id = Column(String, primary_key=True, default=uid)
+    user_id = Column(String, ForeignKey("users.id"), nullable=False)
+    prompt = Column(Text, nullable=False)
+    run_at = Column(DateTime, nullable=False)
+    done = Column(Boolean, default=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
 
     user = relationship("User")

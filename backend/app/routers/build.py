@@ -15,6 +15,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
+from .. import models
 from ..config import settings
 from ..database import get_db
 
@@ -88,7 +89,26 @@ async def build_website(req: BuildRequest, db: Session = Depends(get_db)):
     # prune old jobs
     for k in [k for k, v in _JOBS.items() if time.time() - v["ts"] > 3600]:
         _JOBS.pop(k, None)
-    return {"job_id": job_id, "name": name, "template": template, "html": html}
+    # history: show builds in the usual chats menu, flagged 🔨
+    try:
+        user = db.query(models.User).filter_by(id=req.user_id).first()
+        if not user:
+            user = models.User(id=req.user_id, email=f"{req.user_id}@local")
+            db.add(user)
+            db.commit()
+        conv = models.Conversation(user_id=user.id, title=f"🔨 {name}")
+        db.add(conv)
+        db.commit()
+        db.add(models.Message(conversation_id=conv.id, role="user", content=prompt))
+        db.add(models.Message(conversation_id=conv.id, role="assistant",
+                              content=f"Built **{name}** ({template}, {(len(html) / 1024):.1f} KB). Open Build & Run to preview and download the zip."))
+        db.commit()
+    except Exception:
+        try:
+            db.rollback()
+        except Exception:
+            pass
+    return {"job_id": job_id, "name": name, "template": template, "html": html, "conversation_id": conv.id if "conv" in locals() else None}
 
 
 @router.get("/zip/{job_id}")

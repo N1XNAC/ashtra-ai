@@ -15,7 +15,7 @@ SYSTEM_PROMPT = (
 async def _openai_compat_reply(base_url: str, api_key: str, model: str,
                                user_message: str, profile_context: str = "",
                                history: list[dict] = [], memory_context: str = "",
-                               adaptation: str = "") -> str | None:
+                               adaptation: str = "", deep_thinking: bool = False) -> str | None:
     """POST /chat/completions against any OpenAI-compatible endpoint. None on failure."""
     system = SYSTEM_PROMPT + profile_context
     if adaptation:
@@ -25,16 +25,19 @@ async def _openai_compat_reply(base_url: str, api_key: str, model: str,
     messages = [{"role": "system", "content": system}]
     messages += history[-6:]
     messages.append({"role": "user", "content": user_message})
-    payload: dict = {"model": model, "messages": messages, "max_tokens": 300, "temperature": 0.7}
+    # OFF = lean and fast (220 tokens); ON = full depth (800 tokens).
+    payload: dict = {"model": model, "messages": messages,
+                     "max_tokens": 800 if deep_thinking else 220, "temperature": 0.7}
     if "gpt-oss" in model:
-        # Tiered reasoning: short chats skip thinking, big/code tasks think hard.
+        # Tiered reasoning: short chats stay quick, big/code tasks think hard.
+        # The Complex thinking toggle forces high.
         t = user_message.lower()
         long_or_code = len(user_message) > 800 or any(
             k in t for k in ("code", "debug", "refactor", "algorithm", "implement", "build", "website", "app"))
-        if len(user_message) < 300 and not long_or_code:
-            payload["reasoning_effort"] = "low"
-        elif long_or_code:
+        if deep_thinking or long_or_code:
             payload["reasoning_effort"] = "high"
+        elif len(user_message) < 300:
+            payload["reasoning_effort"] = "low"
         else:
             payload["reasoning_effort"] = "medium"
     try:
@@ -146,19 +149,19 @@ async def describe_image(image_b64: str, mime: str, question: str = "") -> str |
     return await _once(models[0])
 
 
-async def generate_reply(user_message: str, profile_context: str = "", history: list[dict] = [], memory_context: str = "", adaptation: str = "") -> str:
+async def generate_reply(user_message: str, profile_context: str = "", history: list[dict] = [], memory_context: str = "", adaptation: str = "", deep_thinking: bool = False) -> str:
     # Link 1: explicit OpenAI-compatible endpoint (.env)
     if settings.openai_base_url and settings.openai_api_key:
         reply = await _openai_compat_reply(
             settings.openai_base_url, settings.openai_api_key, settings.openai_model,
-            user_message, profile_context, history, memory_context, adaptation)
+            user_message, profile_context, history, memory_context, adaptation, deep_thinking)
         if reply:
             return reply
     # Link 2: Groq free cloud tier — open-weight models (gpt-oss, llama, qwen)
     if settings.groq_api_key:
         reply = await _openai_compat_reply(
             settings.groq_base_url, settings.groq_api_key, settings.groq_model,
-            user_message, profile_context, history, memory_context, adaptation)
+            user_message, profile_context, history, memory_context, adaptation, deep_thinking)
         if reply:
             return reply
     # Link 3: local custom transformer (trained via POST /model/train)

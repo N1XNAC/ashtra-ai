@@ -9,6 +9,8 @@ class ChatRequest(BaseModel):
     # Vision pipeline: text the vision model wrote about an attached image.
     # Fed to the text brain as context; never requires the image itself.
     image_context: Optional[str] = None
+    # Complex thinking toggle: force high reasoning effort (slower, smarter).
+    deep_thinking: bool = False
 
     @field_validator("user_id")
     @classmethod

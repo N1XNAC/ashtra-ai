@@ -132,7 +132,8 @@ async def chat(req: schemas.ChatRequest, request: Request, db: Session = Depends
         ctx += f"\n{reminder_context}"
     if goal_context:
         ctx += f"\n{goal_context}"
-    reply = await ai_core.generate_reply(req.message, ctx, history, memory_context, adaptation_text)
+    reply = await ai_core.generate_reply(req.message, ctx, history, memory_context, adaptation_text,
+                                           deep_thinking=bool(getattr(req, "deep_thinking", False)))
     log.info("[ASHRA API] generation completed user=%s reply_len=%d", user.id, len(reply or ""))
     if not (reply or "").strip():
         log.warning("[ASHRA API] empty reply, using fallback")

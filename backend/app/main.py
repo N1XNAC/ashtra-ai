@@ -1,9 +1,12 @@
+from contextlib import asynccontextmanager
+from datetime import datetime
+
 from fastapi import FastAPI
 from sqlalchemy import text
 from fastapi.middleware.cors import CORSMiddleware
 from .database import Base, engine, ensure_phase3_columns
 from . import models  # noqa: F401 — register tables
-from .routers import chat, memory, profile, agent, model, graph, vision, web, build
+from .routers import chat, memory, profile, agent, model, graph, vision, web, build, schedule
 from .config import settings
 from .security import (
     GlobalRateLimitMiddleware, ApiKeyMiddleware, SecurityHeadersMiddleware)
@@ -26,10 +29,57 @@ if not engine.dialect.name == "sqlite":
     except Exception as e:
         print(f"WARNING: pgvector extension check skipped (DB unreachable): {e}")
 
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    import asyncio
+
+    async def scheduler():
+        from .database import SessionLocal
+        from .services import ai_core
+        while True:
+            try:
+                await asyncio.sleep(30)
+                db = SessionLocal()
+                try:
+                    due = db.query(models.ScheduledMsg).filter(
+                        models.ScheduledMsg.done == False,  # noqa: E712
+                        models.ScheduledMsg.run_at <= datetime.utcnow()).all()
+                    for item in due:
+                        try:
+                            reply = await ai_core.generate_reply(item.prompt)
+                            conv = models.Conversation(
+                                user_id=item.user_id, title=f"⏰ {item.prompt[:40]}")
+                            db.add(conv)
+                            db.commit()
+                            db.add(models.Message(conversation_id=conv.id, role="user",
+                                                  content=item.prompt))
+                            db.add(models.Message(conversation_id=conv.id, role="assistant",
+                                                  content=reply))
+                            item.done = True
+                            db.commit()
+                        except Exception as e:
+                            print(f"WARNING: scheduled item failed: {type(e).__name__}")
+                            try:
+                                db.rollback()
+                            except Exception:
+                                pass
+                finally:
+                    db.close()
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                print(f"WARNING: scheduler loop failed: {type(e).__name__}")
+
+    task = asyncio.create_task(scheduler())
+    yield
+    task.cancel()
+
+
 app = FastAPI(title="Ashtra AI — Phase 6",
               docs_url="/docs" if settings.docs_enabled else None,
               redoc_url=None,
-              openapi_url="/openapi.json" if settings.docs_enabled else None)
+              openapi_url="/openapi.json" if settings.docs_enabled else None,
+              lifespan=lifespan)
 # Safety stack: tight CORS (no "*"), global rate limit, API-key gate, headers.
 app.add_middleware(SecurityHeadersMiddleware)
 app.add_middleware(ApiKeyMiddleware)
@@ -50,6 +100,7 @@ app.include_router(model.router)
 app.include_router(graph.router)
 app.include_router(web.router)
 app.include_router(build.router)
+app.include_router(schedule.router)
 
 @app.get("/health")
 def health():

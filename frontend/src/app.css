@@ -456,3 +456,39 @@ input[type="range"] { width: 100%; accent-color: var(--accent); }
 .uv-chatbot .uv-chat .uv-options .uv-submit:hover svg { color: #f3f6fd; filter: drop-shadow(0 0 5px #ffffff); }
 .uv-chatbot .uv-chat .uv-options .uv-submit:focus svg { color: #f3f6fd; filter: drop-shadow(0 0 5px #ffffff); transform: scale(1.2) rotate(45deg) translateX(-2px) translateY(1px); }
 .uv-chatbot .uv-chat .uv-options .uv-submit:active { transform: scale(0.92); }
+/* ---------- site preview modal (dark browser card) ---------- */
+.bmodal-scrim { position: fixed; inset: 0; z-index: 60; background: rgba(0,0,0,.6); display: flex; align-items: center; justify-content: center; padding: 16px; }
+.bmodal { width: min(560px, 94vw); max-height: 88dvh; display: flex; flex-direction: column; background: #1b1b1e; border: 1px solid #333; border-radius: 12px; overflow: hidden; box-shadow: 0 18px 60px rgba(0,0,0,.55); }
+.b-top { height: 38px; display: flex; align-items: center; gap: 8px; padding: 0 10px; background: #232326; }
+.b-circles { display: flex; gap: 7px; padding: 0 4px; }
+.b-circles .b-c { width: 9px; height: 9px; border-radius: 50%; box-shadow: inset 2px 2px 5px rgba(235,235,235,.35); }
+.b-circles .b-c:first-child { background-color: #ff5f57; }
+.b-circles .b-c:nth-child(2) { background-color: #febc2e; }
+.b-circles .b-c:last-child { background-color: #28c840; }
+.b-url { flex: 1; border: 0.5px solid #3a3a3e; border-radius: 6px; padding: 4px 10px 4px 28px; font-size: 11px; color: #a1a1a6; background: #17171a; box-shadow: inset 2px 2px 2px rgba(0,0,0,.35); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.b-body { width: 100%; height: min(52dvh, 420px); border: 0; background: #fff; }
+.b-foot { display: flex; justify-content: flex-end; padding: 10px 12px; background: #232326; }
+/* ---------- complex thinking toggle ---------- */
+.thinkrow { display: flex; align-items: center; gap: 10px; padding: 2px 4px 8px; }
+.thinklabel { color: #e8e8e8; font-size: 13px; display: flex; flex-direction: column; line-height: 1.25; }
+.thinklabel small { color: #8a8a8a; font-size: 11px; }
+.tk-switch input[type="checkbox"] { display: none; }
+.tk-switch .tk-slider { background-color: #ffffff2b; border-radius: 100px; padding: 1px; margin: 0; cursor: pointer; transition: box-shadow 0.2s cubic-bezier(0.4,0,0.2,1) 0s; align-items: center; position: relative; display: block; width: 51px; height: 29px; box-shadow: rgba(0,0,0,0.62) 0px 0px 5px inset, rgba(0,0,0,0.21) 0px 0px 0px 24px inset, #22cc3f 0px 0px 0px 0px inset, rgba(224,224,224,0.45) 0px 1px 0px 0px; }
+.tk-switch .tk-slider::after { content: ""; display: flex; top: 2.3px; left: 2px; width: 26px; height: 26px; background-color: #e3e3e3; border-radius: 200px; position: absolute; box-shadow: transparent 0px 0px 0px 2px, rgba(0,0,0,0.3) 0px 6px 6px; transition: left 300ms cubic-bezier(0.4,0,0.2,1) 0s, background-color 300ms cubic-bezier(0.4,0,0.2,1) 0s; will-change: left, background-color; }
+.tk-switch input[type="checkbox"]:checked + .tk-slider { box-shadow: rgba(0,0,0,0.62) 0px 0px 5px inset, #22cc3f 0px 0px 0px 2px inset, #22cc3f 0px 0px 0px 24px inset, rgba(224,224,224,0.45) 0px 1px 0px 0px; }
+.tk-switch input[type="checkbox"]:checked + .tk-slider::after { left: 24px; }
+/* ---------- think toggle right + info popover ---------- */
+.thinkrow { display: flex; align-items: center; gap: 10px; padding: 2px 4px 8px; position: relative; }
+.thinklabel { color: #e8e8e8; font-size: 13px; flex: 1; display: flex; align-items: center; gap: 6px; }
+.infobtn { width: 16px; height: 16px; border-radius: 50%; border: 1px solid #8a8a8a; background: transparent; color: #bdbdbd; font-size: 10px; font-style: italic; font-family: Georgia, serif; cursor: pointer; padding: 0; line-height: 1; flex: none; }
+.thinkinfo { position: absolute; top: 100%; left: 4px; right: 4px; background: #2b2b2d; border: 1px solid #3a3a3e; border-radius: 10px; padding: 8px 10px; font-size: 12px; color: #d4d4d4; z-index: 5; }
+.tk-switch { transform: scale(0.8); transform-origin: right center; margin-left: auto; flex: none; }
+/* ---------- build chats highlighted ---------- */
+.conv.buildmark { border: 1px solid rgba(74, 222, 128, 0.35); }
+/* ---------- brain toggle inside composer ---------- */
+.brainbtn { width: 32px; height: 32px; border-radius: 50%; border: 0; flex-shrink: 0; background: none; color: var(--muted); cursor: pointer; display: flex; align-items: center; justify-content: center; transition: color .16s, transform .18s; }
+.brainbtn:hover { color: var(--text); }
+.brainbtn:active { transform: scale(.88); }
+.brainbtn.on { color: #4ade80; filter: drop-shadow(0 0 5px rgba(74,222,128,.6)); }
+.tk-mini { transform: scale(0.62); margin: 0 -4px 0 0; }
+.uv-chatbot .uv-chat .uv-options .uv-btns-add { gap: 2px; align-items: center; }

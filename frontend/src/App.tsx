@@ -76,6 +76,7 @@ const PATHS: Record<string, ReactNode> = {
   terminal: (<><rect x="3" y="4" width="18" height="16" rx="2" /><path d="m7 9 3 3-3 3M12 15h5" /></>),
   external: (<><path d="M14 4h6v6M20 4 11 13" /><path d="M20 14v5a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2h5" /></>),
   dots: (<><circle cx="5" cy="12" r="1.4" /><circle cx="12" cy="12" r="1.4" /><circle cx="19" cy="12" r="1.4" /></>),
+  brain: (<><circle cx="12" cy="12" r="8" /><path d="M12 4v16M8.5 9h7M8.5 15h7" /></>),
   bag: (<><path d="M6 8h12l1 12a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2L6 8Z" /><path d="M9 10V6a3 3 0 0 1 6 0v4" /></>),
 }
 function Icon({ name, size = 17 }: { name: keyof typeof PATHS; size?: number }) {
@@ -208,9 +209,10 @@ function ComposerShell({ lead, field, canSend, onSend, sendLabel, head }: {
 
 /* ---------- shared thread shell: Chat AND Build & Run render through this,
    so both screens are pixel-identical ---------- */
-function ThreadShell({ msgs, busy, status, empty, composer, footer }: {
+function ThreadShell({ msgs, busy, status, empty, composer, footer, actionIndex, action }: {
   msgs: Msg[] | null; busy: boolean; status: string
   empty: ReactNode; composer: ReactNode; footer?: ReactNode
+  actionIndex?: number | null; action?: ReactNode
 }) {
   const bottomRef = useRef<HTMLDivElement>(null)
   useEffect(() => { bottomRef.current?.scrollIntoView({ behavior: 'smooth' }) }, [msgs, busy])
@@ -237,6 +239,7 @@ function ThreadShell({ msgs, busy, status, empty, composer, footer }: {
               <div className="body">
                 <div className="who">Ashtra</div>
                 <div className="md" dangerouslySetInnerHTML={{ __html: renderMd(m.content) }} />
+                {actionIndex === i ? action : null}
                 {(m.meta || true) && (
                   <div className="meta">
                     {m.meta && <span>{m.meta}</span>}
@@ -275,6 +278,9 @@ function Chat({ convId, sessKey, sess, patchSess, onNewConv, refreshSidebar, onD
 }) {
   const { msgs: cached, input, busy, busyLabel, err, attach } = sess
   const [morph, setMorph] = useState(false) /* gooey send-button stretch, one shot per send */
+  const [deep, setDeep] = useState(() => {
+    try { return localStorage.getItem('ashtra-deep') === 'on' } catch { return false }
+  })
   const [phase, setPhase] = useState(0) /* rotating status while busy */
   const PHASES = ['Thinking', 'Recalling memories', 'Drafting reply', 'Polishing']
   const taRef = useRef<HTMLTextAreaElement>(null)
@@ -370,7 +376,7 @@ function Chat({ convId, sessKey, sess, patchSess, onNewConv, refreshSidebar, onD
     }
     try {
       console.log('[ASHRA] sending message')
-      const j = await post('/chat', { user_id: USER, conversation_id: convId, message: content, image_context })
+      const j = await post('/chat', { user_id: USER, conversation_id: convId, message: content, image_context, deep_thinking: deep })
       console.log('[ASHRA] response parsed')
       if (!j || typeof j.reply !== 'string' || !j.reply.trim()) {
         console.log('[ASHRA ERROR] invalid response shape', JSON.stringify(j)?.slice(0, 200))
@@ -417,13 +423,15 @@ function Chat({ convId, sessKey, sess, patchSess, onNewConv, refreshSidebar, onD
   return (
     <ThreadShell msgs={cached} busy={busy} status={busyLabel || `${PHASES[phase]}…`} empty={welcome}
       composer={<ComposerShell
-        head={err ? <div className="errbar"><div>{err}</div></div> : (attach ? (
+        head={<>
+          {err ? <div className="errbar"><div>{err}</div></div> : (attach ? (
           <div className="attachrow">
             <img src={attach.url} className="thumb" alt="" />
             <span className="t">{attach.file.name}</span>
             <button className="copybtn" onClick={clearAttach} aria-label="Remove image">×</button>
           </div>
         ) : null)}
+        </>}
         boxExtra={morph ? 'gulp' : ''}
         lead={<>
           <input ref={fileRef} type="file" accept="image/png,image/jpeg,image/webp,image/gif"
@@ -431,6 +439,13 @@ function Chat({ convId, sessKey, sess, patchSess, onNewConv, refreshSidebar, onD
           <button className="plusbtn" onClick={() => fileRef.current?.click()} aria-label="Attach image">
             <Icon name="plus" size={18} />
           </button>
+          <button className={`brainbtn${deep ? ' on' : ''}`} title="Complex thinking: forces maximum reasoning — slower but smarter. Off = automatic speed."
+            onClick={() => { setDeep(v => { try { localStorage.setItem('ashtra-deep', v ? 'off' : 'on') } catch { /* ignore */ } return !v }) }} aria-label="Complex thinking">
+            <Icon name="brain" size={18} />
+          </button>
+          <label className="tk-switch tk-mini"><input type="checkbox" checked={deep}
+            onChange={e => { setDeep(e.target.checked); try { localStorage.setItem('ashtra-deep', e.target.checked ? 'on' : 'off') } catch { /* ignore */ } }} />
+            <span className="tk-slider" /></label>
         </>}
         field={
           <textarea
@@ -491,7 +506,7 @@ function Sidebar({ view, setView, convId, setConvId, convs, onNew, onDelete, ope
         <div className="sect">Recent chats</div>
         <div className="convlist">
           {rows.map(c => (
-            <button key={c.id} className={`conv${convId === c.id && view === 'chat' ? ' on' : ''}`}
+            <button key={c.id} className={`conv${convId === c.id && view === 'chat' ? ' on' : ''}${c.title.startsWith('🔨') ? ' buildmark' : ''}`}
               onClick={() => { setConvId(c.id); setView('chat'); close() }}>
               <span className="t">{c.title || 'New conversation'}</span>
               <span className="del" onClick={e => { e.stopPropagation(); onDelete(c.id) }}><Icon name="trash" size={15} /></span>
@@ -523,7 +538,7 @@ function LibraryPanel({ convs, convId, setConvId, setView, onDelete, refresh }: 
       <input className="searchbox" autoFocus value={q} onChange={e => setQ(e.target.value)} placeholder="Search chats" />
       <div className="convlist">
         {rows.map(c => (
-          <button key={c.id} className={`conv${convId === c.id ? ' on' : ''}`}
+          <button key={c.id} className={`conv${convId === c.id ? ' on' : ''}${c.title.startsWith('🔨') ? ' buildmark' : ''}`}
             onClick={() => { setConvId(c.id); setView('chat') }}>
             <span className="t">{c.title || 'New conversation'}</span>
             <span className="del" onClick={e => { e.stopPropagation(); onDelete(c.id) }}><Icon name="trash" size={15} /></span>
@@ -538,6 +553,45 @@ function LibraryPanel({ convs, convId, setConvId, setView, onDelete, refresh }: 
 /* ---------- placeholders ---------- */
 function SoonPanel({ title, body }: { title: string; body: string }) {
   return (<div className="panel"><h2>{title}</h2><p className="desc">{body}</p></div>)
+}
+
+/* ---------- scheduled AI messages ---------- */
+type SchedItem = { id: string; prompt: string; run_at: string; done: boolean }
+function ScheduledPanel() {
+  const [prompt, setPrompt] = useState('')
+  const [when, setWhen] = useState('')
+  const [items, setItems] = useState<SchedItem[]>([])
+  async function load() {
+    try { setItems(await api(`/schedule/${USER}`)) } catch { /* offline */ }
+  }
+  useEffect(() => { load() }, [])
+  async function add() {
+    if (!prompt.trim() || !when) return
+    try {
+      await post('/schedule', { user_id: USER, prompt: prompt.trim(), run_at: new Date(when).toISOString() })
+      setPrompt(''); setWhen(''); load()
+    } catch (e) {
+      alert(e instanceof Error ? e.message : 'Could not schedule.')
+    }
+  }
+  return (
+    <div className="panel"><div className="panel-inner">
+      <h2>Scheduled</h2>
+      <p className="desc">Ask now — Ashtra replies in a new chat at the set time.</p>
+      <div className="toolbar">
+        <input value={prompt} maxLength={500} onChange={e => setPrompt(e.target.value)} placeholder="Message for later…" />
+        <input type="datetime-local" value={when} onChange={e => setWhen(e.target.value)} aria-label="When" />
+        <button className="mini primary" disabled={!prompt.trim() || !when} onClick={add}>Schedule</button>
+      </div>
+      {items.map(i => (
+        <div key={i.id} className="card"><div className="row">
+          <div className="grow"><span className="kind">{i.done ? 'done' : new Date(i.run_at).toLocaleString()}</span>{i.prompt}</div>
+          {!i.done && <button className="mini danger" onClick={async () => { await api(`/schedule/${i.id}`, { method: 'DELETE' }); load() }}>Cancel</button>}
+        </div></div>
+      ))}
+      {items.length === 0 && <div className="card">Nothing scheduled yet.</div>}
+    </div></div>
+  )
 }
 
 const PLUGINS: { t: string; d: string }[] = [
@@ -560,18 +614,33 @@ function PluginsPanel() {
 /* ---------- build & run (AI website builder) ---------- */
 function BuildPanel() {
   const [prompt, setPrompt] = useState('')
-  const [log, setLog] = useState<string[]>(['Describe the website to create — I’ll code it, then you can preview and download the zip.'])
-  const [html, setHtml] = useState('')
-  const [jobId, setJobId] = useState('')
+  const [log, setLog] = useState<string[]>(() => {
+    try {
+      const raw = localStorage.getItem('ashtra-build-v1')
+      if (raw) { const d = JSON.parse(raw); if (Array.isArray(d?.log)) return d.log.slice(-50) }
+    } catch { /* ignore */ }
+    return ['Describe the website to create — I’ll code it, then you can preview and download the zip.']
+  })
+  const [html, setHtml] = useState(() => {
+    try { return JSON.parse(localStorage.getItem('ashtra-build-v1') || '{}').html || '' } catch { return '' }
+  })
+  const [jobId, setJobId] = useState(() => {
+    try { return JSON.parse(localStorage.getItem('ashtra-build-v1') || '{}').jobId || '' } catch { return '' }
+  })
+  useEffect(() => {
+    try { localStorage.setItem('ashtra-build-v1', JSON.stringify({ log: log.slice(-50), html, jobId })) } catch { /* quota */ }
+  }, [log, html, jobId])
   const [busy, setBusy] = useState(false)
-  const [preview, setPreview] = useState(false)
+  const [siteOpen, setSiteOpen] = useState(false)
   const push = (s: string) => setLog(l => [...l.slice(-50), s])
   async function run() {
     const p = prompt.trim()
     if (!p || busy) return
-    setBusy(true); setHtml(''); setJobId(''); setPreview(false); setPrompt('')
+    setBusy(true); setHtml(''); setJobId(''); setSiteOpen(false); setPrompt('')
     push(`$ build "${p.length > 60 ? p.slice(0, 60) + '…' : p}"`)
-    push('> picking template…')
+    push('> coding…')
+    const t1 = setTimeout(() => push('> polishing…'), 10000)
+    const t2 = setTimeout(() => push('> final touches…'), 22000)
     try {
       const j = await api('/build/website', { method: 'POST', body: JSON.stringify({ user_id: USER, prompt: p }) }, 150000) as { job_id: string; name: string; template: string; html: string }
       setHtml(j.html); setJobId(j.job_id)
@@ -580,6 +649,7 @@ function BuildPanel() {
     } catch (e) {
       push(`> error: ${e instanceof Error ? e.message : 'build failed'}`)
     }
+    clearTimeout(t1); clearTimeout(t2)
     setBusy(false)
   }
   async function download() {
@@ -602,10 +672,13 @@ function BuildPanel() {
   const msgs: Msg[] = log.map(l => l.startsWith('$ ')
     ? { role: 'user', content: l.slice(2) }
     : { role: 'assistant', content: l })
+  const doneIdx = html ? msgs.map((m, i) => m.role === 'assistant' ? i : -1).filter(i => i >= 0).pop() ?? null : null
   return (
     <ThreadShell msgs={msgs} busy={busy} status="Working…"
       empty={<div className="welcome"><h1>Build &amp; Run</h1>
         <p>Describe a website — Ashtra codes it, then you preview and download the zip.</p></div>}
+      actionIndex={doneIdx}
+      action={html ? <button className="mini" onClick={() => setSiteOpen(true)}>Preview</button> : null}
       composer={
         <ComposerShell
           field={
@@ -618,13 +691,19 @@ function BuildPanel() {
           onSend={run} sendLabel="Build" />
       }
       footer={<>
-        {html && (
-          <div className="buildrow">
-            <button className="mini" onClick={() => setPreview(v => !v)}>{preview ? 'Hide preview' : 'Preview'}</button>
-            <button className="mini" onClick={download}>Download zip</button>
+        {siteOpen && html && (
+          <div className="bmodal-scrim" onClick={() => setSiteOpen(false)}>
+            <div className="bmodal" onClick={e => e.stopPropagation()}>
+              <div className="b-top">
+                <div className="b-circles"><span className="b-c" /><span className="b-c" /><span className="b-c" /></div>
+                <div className="b-url">preview</div>
+                <button className="iconbtn" aria-label="Close preview" onClick={() => setSiteOpen(false)}><Icon name="x" size={16} /></button>
+              </div>
+              <iframe title="preview" className="b-body" srcDoc={html} sandbox="" />
+              <div className="b-foot"><button className="mini" onClick={download}>Download zip</button></div>
+            </div>
           </div>
         )}
-        {preview && html && <iframe title="preview" className="previewframe" srcDoc={html} sandbox="" />}
       </>} />
   )
 }
@@ -902,7 +981,7 @@ export default function App() {
           patchSess={patchSess} onNewConv={onNewConv} refreshSidebar={refreshConvs} onDraft={addDraftConv} />}
         {view === 'library' && <LibraryPanel convs={convs} convId={convId} setConvId={setConvId} setView={setView} onDelete={(id) => setConfirmDel(id)} refresh={refreshConvs} />}
         {view === 'projects' && <SoonPanel title="Projects" body="Project workspaces are coming soon." />}
-        {view === 'scheduled' && <SoonPanel title="Scheduled" body="Scheduled tasks will live here." />}
+        {view === 'scheduled' && <ScheduledPanel />}
         {view === 'plugins' && <PluginsPanel />}
         {view === 'build' && <BuildPanel />}
         {view === 'chat' && busyOthers.length > 0 && (
