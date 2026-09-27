@@ -180,20 +180,27 @@ const SUGGESTIONS: { t: string; s: string; icon: 'chat' | 'code' | 'calendar' | 
   { t: 'Set a goal', s: 'e.g. add a goal to learn piano', icon: 'target' },
 ]
 
-/* ---------- shared composer shell: identical input bar everywhere ---------- */
-function ComposerShell({ lead, field, canSend, onSend, sendLabel, boxExtra, head }: {
+/* ---------- shared composer shell: Uiverse-style gradient composer,
+   identical on every screen ---------- */
+function ComposerShell({ lead, field, canSend, onSend, sendLabel, head }: {
   lead?: ReactNode; field: ReactNode; canSend: boolean
   onSend: () => void; sendLabel: string; boxExtra?: string; head?: ReactNode
 }) {
   return (
     <div className="composer">
       {head}
-      <div className={`composer-box${boxExtra ? ' ' + boxExtra : ''}`}>
-        {lead}
-        {field}
-        <button className="sendbtn" disabled={!canSend} onClick={onSend} aria-label={sendLabel}>
-          <Icon name="up" size={18} />
-        </button>
+      <div className="uv-chatbot">
+        <div className="uv-chat-options">
+          <div className="uv-chat">
+            <div className="uv-chat-bot">{field}</div>
+            <div className="uv-options">
+              <div className="uv-btns-add">{lead}</div>
+              <button className="uv-submit" disabled={!canSend} onClick={onSend} aria-label={sendLabel}>
+                <i><Icon name="up" size={18} /></i>
+              </button>
+            </div>
+          </div>
+        </div>
       </div>
     </div>
   )
