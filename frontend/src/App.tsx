@@ -508,7 +508,7 @@ function PluginsPanel() {
 /* ---------- build & run (AI website builder) ---------- */
 function BuildPanel() {
   const [prompt, setPrompt] = useState('')
-  const [log, setLog] = useState<string[]>(['$ ashtra build — describe the website to create.'])
+  const [log, setLog] = useState<string[]>(['Describe the website to create — I’ll code it, then you can preview and download the zip.'])
   const [html, setHtml] = useState('')
   const [jobId, setJobId] = useState('')
   const [busy, setBusy] = useState(false)
@@ -548,18 +548,25 @@ function BuildPanel() {
     }
   }
   return (
-    <div className="panel"><h2>Build &amp; Run</h2>
-      <p className="desc">AI builds single-file websites. Describe, preview, download zip.</p>
-      <div className="term">
-        {log.map((l, i) => <div key={i} className="termline">{l}</div>)}
-        {busy && <div className="termline">{'> working…'}</div>}
-      </div>
-      <div className="composer-box">
-        <input id="build-input" name="build" value={prompt} maxLength={500}
-          onChange={e => setPrompt(e.target.value)}
-          onKeyDown={e => { if (e.key === 'Enter') run() }}
-          placeholder="e.g. portfolio site for a photographer…" />
-        <button className="sendbtn" disabled={busy || !prompt.trim()} onClick={run} aria-label="Build"><Icon name="up" size={18} /></button>
+    <div className="main">
+      <div className="thread"><div className="thread-inner">
+        {log.map((l, i) => l.startsWith('$ ') ? (
+          <div key={i} className="msg userrow"><div className="body">{l.slice(2)}</div></div>
+        ) : (
+          <div key={i} className="msg"><div className="avatar">A</div>
+            <div className="body"><div className="who">Ashtra</div><div className="md">{l}</div></div></div>
+        ))}
+        {busy && <div className="msg"><div className="avatar">A</div>
+          <div className="body"><div className="typing"><i /><i /><i /></div></div></div>}
+      </div></div>
+      <div className="composer-zone">
+        <div className="composer-box">
+          <input id="build-input" name="build" value={prompt} maxLength={500}
+            onChange={e => setPrompt(e.target.value)}
+            onKeyDown={e => { if (e.key === 'Enter') run() }}
+            placeholder="e.g. portfolio site for a photographer…" />
+          <button className="sendbtn" disabled={busy || !prompt.trim()} onClick={run} aria-label="Build"><Icon name="up" size={18} /></button>
+        </div>
       </div>
       {html && (
         <div className="buildrow">
