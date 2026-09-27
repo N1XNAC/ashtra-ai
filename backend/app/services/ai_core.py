@@ -26,6 +26,19 @@ async def _openai_compat_reply(base_url: str, api_key: str, model: str,
     messages += history[-6:]
     messages.append({"role": "user", "content": user_message})
     payload: dict = {"model": model, "messages": messages, "max_tokens": 300, "temperature": 0.7}
+    if "gpt-oss" in model:
+        # Tiered reasoning: short chats skip thinking, big/code tasks think hard.
+        t = user_message.lower()
+        long_or_code = len(user_message) > 800 or any(
+            k in t for k in ("code", "debug", "refactor", "algorithm", "implement", "build", "website", "app"))
+        if len(user_message) < 60 and not long_or_code:
+            payload["reasoning_effort"] = "none"
+        elif len(user_message) < 300 and not long_or_code:
+            payload["reasoning_effort"] = "low"
+        elif long_or_code:
+            payload["reasoning_effort"] = "high"
+        else:
+            payload["reasoning_effort"] = "medium"
     try:
         async with httpx.AsyncClient(timeout=60) as c:
             r = await c.post(

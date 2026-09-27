@@ -128,7 +128,7 @@ function renderMd(src: string) {
 }
 
 /* ---------- types ---------- */
-type View = 'chat' | 'library' | 'projects' | 'scheduled' | 'plugins' | 'memory' | 'goals' | 'you'
+type View = 'chat' | 'library' | 'projects' | 'scheduled' | 'plugins' | 'build' | 'memory' | 'goals' | 'you'
 type Msg = { role: string; content: string; meta?: string; fresh?: boolean; attachment?: string }
 type Conv = { id: string; title: string; created_at?: string }
 /* Per-chat session: drafts, attachments, messages and working state live here,
@@ -424,6 +424,7 @@ function Sidebar({ view, setView, convId, setConvId, convs, onNew, onDelete, ope
         </div>
         <nav className="mnav">
           {row('New chat', 'pen', view === 'chat', () => { onNew(); close() })}
+          {row('Build & Run', 'terminal', view === 'build', () => go('build'))}
           {row('Scheduled', 'clock', view === 'scheduled', () => go('scheduled'))}
           {row('More', 'dots', false, () => setMoreOpen(v => !v))}
           {moreOpen && (<>
@@ -504,7 +505,72 @@ function PluginsPanel() {
   )
 }
 
-/* ---------- memory panel ---------- */
+/* ---------- build & run (AI website builder) ---------- */
+function BuildPanel() {
+  const [prompt, setPrompt] = useState('')
+  const [log, setLog] = useState<string[]>(['$ ashtra build — describe the website to create.'])
+  const [html, setHtml] = useState('')
+  const [jobId, setJobId] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [preview, setPreview] = useState(false)
+  const push = (s: string) => setLog(l => [...l.slice(-50), s])
+  async function run() {
+    const p = prompt.trim()
+    if (!p || busy) return
+    setBusy(true); setHtml(''); setJobId(''); setPreview(false); setPrompt('')
+    push(`$ build "${p.length > 60 ? p.slice(0, 60) + '…' : p}"`)
+    push('> picking template…')
+    try {
+      const j = await post('/build/website', { user_id: USER, prompt: p }) as { job_id: string; name: string; template: string; html: string }
+      setHtml(j.html); setJobId(j.job_id)
+      push(`> template: ${j.template}`)
+      push(`> done: ${j.name} (${(j.html.length / 1024).toFixed(1)} KB) — preview or download below.`)
+    } catch (e) {
+      push(`> error: ${e instanceof Error ? e.message : 'build failed'}`)
+    }
+    setBusy(false)
+  }
+  async function download() {
+    if (!jobId) return
+    push('$ downloading zip…')
+    try {
+      const headers: Record<string, string> = {}
+      if (API_KEY) headers['X-API-Key'] = API_KEY
+      const r = await fetch(API + '/build/zip/' + jobId, { headers })
+      if (!r.ok) throw new Error(`HTTP ${r.status}`)
+      const url = URL.createObjectURL(await r.blob())
+      const a = document.createElement('a')
+      a.href = url; a.download = 'website.zip'; a.click()
+      setTimeout(() => URL.revokeObjectURL(url), 5000)
+      push('> saved website.zip — deploy index.html anywhere.')
+    } catch (e) {
+      push(`> download failed: ${e instanceof Error ? e.message : 'error'}`)
+    }
+  }
+  return (
+    <div className="panel"><h2>Build &amp; Run</h2>
+      <p className="desc">AI builds single-file websites. Describe, preview, download zip.</p>
+      <div className="term">
+        {log.map((l, i) => <div key={i} className="termline">{l}</div>)}
+        {busy && <div className="termline">{'> working…'}</div>}
+      </div>
+      <div className="composer-box">
+        <input id="build-input" name="build" value={prompt} maxLength={500}
+          onChange={e => setPrompt(e.target.value)}
+          onKeyDown={e => { if (e.key === 'Enter') run() }}
+          placeholder="e.g. portfolio site for a photographer…" />
+        <button className="sendbtn" disabled={busy || !prompt.trim()} onClick={run} aria-label="Build"><Icon name="up" size={18} /></button>
+      </div>
+      {html && (
+        <div className="buildrow">
+          <button className="mini" onClick={() => setPreview(v => !v)}>{preview ? 'Hide preview' : 'Preview'}</button>
+          <button className="mini" onClick={download}>Download zip</button>
+        </div>
+      )}
+      {preview && html && <iframe title="preview" className="previewframe" srcDoc={html} sandbox="" />}
+    </div>
+  )
+}
 type Mem = { id: string; kind: string; content: string; importance: string; memory_type: string }
 function MemoryPanel() {
   const [q, setQ] = useState('')
@@ -760,7 +826,7 @@ export default function App() {
     setConvId(id)
   }
 
-  const titles: Record<View, string> = { chat: 'Ashtra', library: 'Library', projects: 'Projects', scheduled: 'Scheduled', plugins: 'Plugins', memory: 'Memory', goals: 'Goals', you: 'You' }
+  const titles: Record<View, string> = { chat: 'Ashtra', library: 'Library', projects: 'Projects', scheduled: 'Scheduled', plugins: 'Plugins', build: 'Build & Run', memory: 'Memory', goals: 'Goals', you: 'You' }
 
   return (
     <div className={fx ? 'ash' : 'ash no-fx'}>
@@ -781,6 +847,7 @@ export default function App() {
         {view === 'projects' && <SoonPanel title="Projects" body="Project workspaces are coming soon." />}
         {view === 'scheduled' && <SoonPanel title="Scheduled" body="Scheduled tasks will live here." />}
         {view === 'plugins' && <PluginsPanel />}
+        {view === 'build' && <BuildPanel />}
         {view === 'chat' && busyOthers.length > 0 && (
           <button className="workpill" onClick={() => {
             const k = busyOthers[0][0]
