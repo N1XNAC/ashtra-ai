@@ -139,9 +139,13 @@ async def chat(req: schemas.ChatRequest, request: Request, db: Session = Depends
         reply = "Sorry, I couldn't generate a response. Please try again."
     if tool_calls:
         reply = reply.rstrip() + " 🔧[" + ", ".join(c["tool"] for c in tool_calls) + "]"
-    # --- Web images: "what does a banana look like" → inline Commons photos ---
-    _img_q = web_images.wants_images(req.message)
-    _imgs = web_images.search(_img_q) if _img_q else []
+    # --- Web images: "what does a banana look like" → inline photos ---
+    _imgs: list = []
+    try:
+        _img_q = web_images.wants_images(req.message)
+        _imgs = web_images.search(_img_q) if _img_q else []
+    except Exception as e:
+        log.warning("[ASHRA API] web images failed: %s", type(e).__name__)
     if _imgs:
         reply = reply.rstrip() + "\n\n" + "\n".join(
             f"![{i['title']}]({i['thumb']})" for i in _imgs)
