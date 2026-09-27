@@ -180,21 +180,80 @@ const SUGGESTIONS: { t: string; s: string; icon: 'chat' | 'code' | 'calendar' | 
   { t: 'Set a goal', s: 'e.g. add a goal to learn piano', icon: 'target' },
 ]
 
+/* ---------- shared thread shell: Chat AND Build & Run render through this,
+   so both screens are pixel-identical ---------- */
+function ThreadShell({ msgs, busy, status, empty, composer, footer }: {
+  msgs: Msg[] | null; busy: boolean; status: string
+  empty: ReactNode; composer: ReactNode; footer?: ReactNode
+}) {
+  const bottomRef = useRef<HTMLDivElement>(null)
+  useEffect(() => { bottomRef.current?.scrollIntoView({ behavior: 'smooth' }) }, [msgs, busy])
+  return (
+    <>
+      <div className="thread">
+        <div className="thread-inner">
+          {msgs === null ? (
+            <div className="msg">
+              <div className="avatar">A</div>
+              <div className="body"><div className="typing"><i /><i /><i /></div></div>
+            </div>
+          ) : msgs.length === 0 && !busy ? empty : null}
+          {(msgs ?? []).map((m, i) => m.role === 'user' ? (
+            <div key={i} className={m.fresh ? 'msg userrow fresh' : 'msg userrow'}>
+              <div className="body">
+                {m.attachment && <div className="attchip"><Icon name="image" size={13} /> {m.attachment}</div>}
+                {m.content}
+              </div>
+            </div>
+          ) : (
+            <div key={i} className={m.fresh ? 'msg fresh' : 'msg'}>
+              <div className="avatar">A</div>
+              <div className="body">
+                <div className="who">Ashtra</div>
+                <div className="md" dangerouslySetInnerHTML={{ __html: renderMd(m.content) }} />
+                {(m.meta || true) && (
+                  <div className="meta">
+                    {m.meta && <span>{m.meta}</span>}
+                    <button className="copybtn" title="Copy" onClick={() => navigator.clipboard?.writeText(m.content)}>
+                      <Icon name="copy" size={12} />
+                    </button>
+                  </div>
+                )}
+              </div>
+            </div>
+          ))}
+          {busy && (
+            <div className="msg">
+              <div className="avatar">A</div>
+              <div className="body">
+                <div className="typing"><i /><i /><i /></div>
+                <div className="lab" style={{ marginTop: 2 }}>{status}</div>
+              </div>
+            </div>
+          )}
+          <div ref={bottomRef} />
+        </div>
+      </div>
+      <div className="composer-zone">
+        {composer}
+        {footer}
+      </div>
+    </>
+  )
+}
+
 function Chat({ convId, sessKey, sess, patchSess, onNewConv, refreshSidebar, onDraft }: {
   convId: string | null; sessKey: string; sess: Sess
   patchSess: (key: string, p: Partial<Sess>) => void
   onNewConv: (id: string) => void; refreshSidebar: () => void; onDraft: (title: string) => void
 }) {
   const { msgs: cached, input, busy, busyLabel, err, attach } = sess
-  const msgs = cached ?? []
   const [morph, setMorph] = useState(false) /* gooey send-button stretch, one shot per send */
   const [phase, setPhase] = useState(0) /* rotating status while busy */
   const PHASES = ['Thinking', 'Recalling memories', 'Drafting reply', 'Polishing']
-  const bottomRef = useRef<HTMLDivElement>(null)
   const taRef = useRef<HTMLTextAreaElement>(null)
   const fileRef = useRef<HTMLInputElement>(null)
 
-  useEffect(() => { bottomRef.current?.scrollIntoView({ behavior: 'smooth' }) }, [cached, busy])
   useEffect(() => {
     if (!busy) { setPhase(0); return }
     const t = setInterval(() => setPhase(p => (p + 1) % 4), 4000)
@@ -315,66 +374,23 @@ function Chat({ convId, sessKey, sess, patchSess, onNewConv, refreshSidebar, onD
     }
   }
 
-  return (
-    <>
-      <div className="thread">
-        <div className="thread-inner">
-          {cached === null ? (
-            <div className="msg">
-              <div className="avatar">A</div>
-              <div className="body"><div className="typing"><i /><i /><i /></div></div>
-            </div>
-          ) : msgs.length === 0 && !busy ? (
-            <div className="welcome">
-              <h1>What can I do for you, master?</h1>
-              <p>Ashtra remembers, plans, and acts — powered by open-source AI.</p>
-              <div className="suggest">
-                {SUGGESTIONS.map(s => (
-                  <button key={s.t} className="sug" onClick={() => send(s.s)}>
-                    <span className="sug-ic"><Icon name={s.icon} size={18} /></span>
-                    <span>{s.t}<small>{s.s}</small></span>
-                  </button>
-                ))}
-              </div>
-            </div>
-          ) : null}
-          {msgs.map((m, i) => m.role === 'user' ? (
-            <div key={i} className={m.fresh ? 'msg userrow fresh' : 'msg userrow'}>
-              <div className="body">
-                {m.attachment && <div className="attchip"><Icon name="image" size={13} /> {m.attachment}</div>}
-                {m.content}
-              </div>
-            </div>
-          ) : (
-            <div key={i} className={m.fresh ? 'msg fresh' : 'msg'}>
-              <div className="avatar">A</div>
-              <div className="body">
-                <div className="who">Ashtra</div>
-                <div className="md" dangerouslySetInnerHTML={{ __html: renderMd(m.content) }} />
-                {(m.meta || true) && (
-                  <div className="meta">
-                    {m.meta && <span>{m.meta}</span>}
-                    <button className="copybtn" title="Copy" onClick={() => navigator.clipboard?.writeText(m.content)}>
-                      <Icon name="copy" size={12} />
-                    </button>
-                  </div>
-                )}
-              </div>
-            </div>
-          ))}
-          {busy && (
-            <div className="msg">
-              <div className="avatar">A</div>
-              <div className="body">
-                <div className="typing"><i /><i /><i /></div>
-                <div className="lab" style={{ marginTop: 2 }}>{busyLabel || `${PHASES[phase]}…`}</div>
-              </div>
-            </div>
-          )}
-          <div ref={bottomRef} />
-        </div>
+  const welcome = (
+    <div className="welcome">
+      <h1>What can I do for you, master?</h1>
+      <p>Ashtra remembers, plans, and acts — powered by open-source AI.</p>
+      <div className="suggest">
+        {SUGGESTIONS.map(s => (
+          <button key={s.t} className="sug" onClick={() => send(s.s)}>
+            <span className="sug-ic"><Icon name={s.icon} size={18} /></span>
+            <span>{s.t}<small>{s.s}</small></span>
+          </button>
+        ))}
       </div>
-      <div className="composer-zone">
+    </div>
+  )
+  return (
+    <ThreadShell msgs={cached} busy={busy} status={busyLabel || `${PHASES[phase]}…`} empty={welcome}
+      composer={<>
         {err && <div className="errbar"><div>{err}</div></div>}
         <div className="composer">
           {attach && (
@@ -402,8 +418,7 @@ function Chat({ convId, sessKey, sess, patchSess, onNewConv, refreshSidebar, onD
           </div>
           <div className="hint">Ashtra can make mistakes. Memories are transparent and exportable.</div>
         </div>
-      </div>
-    </>
+      </>} />
   )
 }
 
@@ -559,19 +574,14 @@ function BuildPanel() {
       push(`> download failed: ${e instanceof Error ? e.message : 'error'}`)
     }
   }
+  const msgs: Msg[] = log.map(l => l.startsWith('$ ')
+    ? { role: 'user', content: l.slice(2) }
+    : { role: 'assistant', content: l })
   return (
-    <>
-      <div className="thread"><div className="thread-inner">
-        {log.map((l, i) => l.startsWith('$ ') ? (
-          <div key={i} className="msg userrow"><div className="body">{l.slice(2)}</div></div>
-        ) : (
-          <div key={i} className="msg"><div className="avatar">A</div>
-            <div className="body"><div className="who">Ashtra</div><div className="md">{l}</div></div></div>
-        ))}
-        {busy && <div className="msg"><div className="avatar">A</div>
-          <div className="body"><div className="typing"><i /><i /><i /></div></div></div>}
-      </div></div>
-      <div className="composer-zone">
+    <ThreadShell msgs={msgs} busy={busy} status="Working…"
+      empty={<div className="welcome"><h1>Build &amp; Run</h1>
+        <p>Describe a website — Ashtra codes it, then you preview and download the zip.</p></div>}
+      composer={
         <div className="composer-box">
           <input id="build-input" name="build" value={prompt} maxLength={500}
             onChange={e => setPrompt(e.target.value)}
@@ -579,15 +589,16 @@ function BuildPanel() {
             placeholder="e.g. portfolio site for a photographer…" />
           <button className="sendbtn" disabled={busy || !prompt.trim()} onClick={run} aria-label="Build"><Icon name="up" size={18} /></button>
         </div>
-      </div>
-      {html && (
-        <div className="buildrow">
-          <button className="mini" onClick={() => setPreview(v => !v)}>{preview ? 'Hide preview' : 'Preview'}</button>
-          <button className="mini" onClick={download}>Download zip</button>
-        </div>
-      )}
-      {preview && html && <iframe title="preview" className="previewframe" srcDoc={html} sandbox="" />}
-    </>
+      }
+      footer={<>
+        {html && (
+          <div className="buildrow">
+            <button className="mini" onClick={() => setPreview(v => !v)}>{preview ? 'Hide preview' : 'Preview'}</button>
+            <button className="mini" onClick={download}>Download zip</button>
+          </div>
+        )}
+        {preview && html && <iframe title="preview" className="previewframe" srcDoc={html} sandbox="" />}
+      </>} />
   )
 }
 type Mem = { id: string; kind: string; content: string; importance: string; memory_type: string }
