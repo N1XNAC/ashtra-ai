@@ -31,9 +31,7 @@ async def _openai_compat_reply(base_url: str, api_key: str, model: str,
         t = user_message.lower()
         long_or_code = len(user_message) > 800 or any(
             k in t for k in ("code", "debug", "refactor", "algorithm", "implement", "build", "website", "app"))
-        if len(user_message) < 60 and not long_or_code:
-            payload["reasoning_effort"] = "none"
-        elif len(user_message) < 300 and not long_or_code:
+        if len(user_message) < 300 and not long_or_code:
             payload["reasoning_effort"] = "low"
         elif long_or_code:
             payload["reasoning_effort"] = "high"
