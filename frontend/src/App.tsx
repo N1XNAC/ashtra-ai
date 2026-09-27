@@ -180,6 +180,25 @@ const SUGGESTIONS: { t: string; s: string; icon: 'chat' | 'code' | 'calendar' | 
   { t: 'Set a goal', s: 'e.g. add a goal to learn piano', icon: 'target' },
 ]
 
+/* ---------- shared composer shell: identical input bar everywhere ---------- */
+function ComposerShell({ lead, field, canSend, onSend, sendLabel, boxExtra, head }: {
+  lead?: ReactNode; field: ReactNode; canSend: boolean
+  onSend: () => void; sendLabel: string; boxExtra?: string; head?: ReactNode
+}) {
+  return (
+    <div className="composer">
+      {head}
+      <div className={`composer-box${boxExtra ? ' ' + boxExtra : ''}`}>
+        {lead}
+        {field}
+        <button className="sendbtn" disabled={!canSend} onClick={onSend} aria-label={sendLabel}>
+          <Icon name="up" size={18} />
+        </button>
+      </div>
+    </div>
+  )
+}
+
 /* ---------- shared thread shell: Chat AND Build & Run render through this,
    so both screens are pixel-identical ---------- */
 function ThreadShell({ msgs, busy, status, empty, composer, footer }: {
@@ -390,35 +409,34 @@ function Chat({ convId, sessKey, sess, patchSess, onNewConv, refreshSidebar, onD
   )
   return (
     <ThreadShell msgs={cached} busy={busy} status={busyLabel || `${PHASES[phase]}…`} empty={welcome}
-      composer={<>
-        {err && <div className="errbar"><div>{err}</div></div>}
-        <div className="composer">
-          {attach && (
-            <div className="attachrow">
-              <img src={attach.url} className="thumb" alt="" />
-              <span className="t">{attach.file.name}</span>
-              <button className="copybtn" onClick={clearAttach} aria-label="Remove image">×</button>
-            </div>
-          )}
-          <div className={morph ? 'composer-box gulp' : 'composer-box'}>
-            <input ref={fileRef} type="file" accept="image/png,image/jpeg,image/webp,image/gif"
-              hidden onChange={pickImage} />
-            <button className="plusbtn" onClick={() => fileRef.current?.click()} aria-label="Attach image">
-              <Icon name="plus" size={18} />
-            </button>
-            <textarea
-              id="ashtra-composer" name="message"
-              ref={taRef} rows={1} value={input} maxLength={MAXLEN + 100}
-              onChange={e => { patchSess(sessKey, { input: e.target.value }); autosize() }}
-              onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send() } }}
-              placeholder="Message Ashtra…" />
-            <button className={morph ? 'sendbtn morph' : 'sendbtn'} disabled={busy || cached === null || (!input.trim() && !attach)} onClick={() => send()} aria-label="Send">
-              <Icon name="up" size={18} />
-            </button>
+      composer={<ComposerShell
+        head={err ? <div className="errbar"><div>{err}</div></div> : (attach ? (
+          <div className="attachrow">
+            <img src={attach.url} className="thumb" alt="" />
+            <span className="t">{attach.file.name}</span>
+            <button className="copybtn" onClick={clearAttach} aria-label="Remove image">×</button>
           </div>
-          <div className="hint">Ashtra can make mistakes. Memories are transparent and exportable.</div>
-        </div>
-      </>} />
+        ) : null)}
+        boxExtra={morph ? 'gulp' : ''}
+        lead={<>
+          <input ref={fileRef} type="file" accept="image/png,image/jpeg,image/webp,image/gif"
+            hidden onChange={pickImage} />
+          <button className="plusbtn" onClick={() => fileRef.current?.click()} aria-label="Attach image">
+            <Icon name="plus" size={18} />
+          </button>
+        </>}
+        field={
+          <textarea
+            id="ashtra-composer" name="message"
+            ref={taRef} rows={1} value={input} maxLength={MAXLEN + 100}
+            onChange={e => { patchSess(sessKey, { input: e.target.value }); autosize() }}
+            onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send() } }}
+            placeholder="Message Ashtra…" />
+        }
+        canSend={!(busy || cached === null || (!input.trim() && !attach))}
+        onSend={() => send()} sendLabel="Send" />
+      }
+      footer={<div className="hint">Ashtra can make mistakes. Memories are transparent and exportable.</div>} />
   )
 }
 
@@ -582,13 +600,15 @@ function BuildPanel() {
       empty={<div className="welcome"><h1>Build &amp; Run</h1>
         <p>Describe a website — Ashtra codes it, then you preview and download the zip.</p></div>}
       composer={
-        <div className="composer-box">
-          <input id="build-input" name="build" value={prompt} maxLength={500}
-            onChange={e => setPrompt(e.target.value)}
-            onKeyDown={e => { if (e.key === 'Enter') run() }}
-            placeholder="e.g. portfolio site for a photographer…" />
-          <button className="sendbtn" disabled={busy || !prompt.trim()} onClick={run} aria-label="Build"><Icon name="up" size={18} /></button>
-        </div>
+        <ComposerShell
+          field={
+            <input id="build-input" name="build" value={prompt} maxLength={500}
+              onChange={e => setPrompt(e.target.value)}
+              onKeyDown={e => { if (e.key === 'Enter') run() }}
+              placeholder="e.g. portfolio site for a photographer…" />
+          }
+          canSend={!(busy || !prompt.trim())}
+          onSend={run} sendLabel="Build" />
       }
       footer={<>
         {html && (
