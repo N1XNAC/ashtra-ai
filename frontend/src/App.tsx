@@ -13,13 +13,13 @@ class ApiError extends Error {
   }
 }
 
-async function api(path: string, opts?: RequestInit) {
+async function api(path: string, opts?: RequestInit, timeoutMs = 75000) {
   const headers: Record<string, string> = { 'Content-Type': 'application/json' }
   if (API_KEY) headers['X-API-Key'] = API_KEY
   console.log('[ASHRA] request started', path)
   let r: Response
   try {
-    r = await fetch(API + path, { ...opts, headers: { ...headers, ...(opts?.headers as Record<string, string> ?? {}) }, signal: AbortSignal.timeout(75000) })
+    r = await fetch(API + path, { ...opts, headers: { ...headers, ...(opts?.headers as Record<string, string> ?? {}) }, signal: AbortSignal.timeout(timeoutMs) })
   } catch (e) {
     console.log('[ASHRA ERROR]', e instanceof Error ? `${e.name}: ${e.message}` : e)
     if (e instanceof DOMException && e.name === 'TimeoutError') throw new ApiError(0, 'Request timed out after 75s — backend still working or network stalled. Check back in the chat; the reply lands on revisit.', null)
@@ -533,7 +533,7 @@ function BuildPanel() {
     push(`$ build "${p.length > 60 ? p.slice(0, 60) + '…' : p}"`)
     push('> picking template…')
     try {
-      const j = await post('/build/website', { user_id: USER, prompt: p }) as { job_id: string; name: string; template: string; html: string }
+      const j = await api('/build/website', { method: 'POST', body: JSON.stringify({ user_id: USER, prompt: p }) }, 150000) as { job_id: string; name: string; template: string; html: string }
       setHtml(j.html); setJobId(j.job_id)
       push(`> template: ${j.template}`)
       push(`> done: ${j.name} (${(j.html.length / 1024).toFixed(1)} KB) — preview or download below.`)
@@ -560,7 +560,7 @@ function BuildPanel() {
     }
   }
   return (
-    <div className="main">
+    <>
       <div className="thread"><div className="thread-inner">
         {log.map((l, i) => l.startsWith('$ ') ? (
           <div key={i} className="msg userrow"><div className="body">{l.slice(2)}</div></div>
@@ -587,7 +587,7 @@ function BuildPanel() {
         </div>
       )}
       {preview && html && <iframe title="preview" className="previewframe" srcDoc={html} sandbox="" />}
-    </div>
+    </>
   )
 }
 type Mem = { id: string; kind: string; content: string; importance: string; memory_type: string }
