@@ -4,9 +4,12 @@ from ..database import get_db
 from .. import models, schemas
 from ..config import settings
 from ..security import check_rate, client_ip
-from ..services import ai_core, memory_engine, behavior_analyzer, personality_adapter, planner, knowledge_graph, web_images
+from ..services import ai_core, memory_engine, behavior_analyzer, personality_adapter, planner, knowledge_graph
 from ..services import agent as agent_exec
 from ..services.tools import due_reminders
+import logging
+
+log = logging.getLogger("ashtra.api")
 
 router = APIRouter(prefix="/chat", tags=["chat"])
 
@@ -35,6 +38,7 @@ def _apply_profile_hints(profile, hints: dict):
 
 @router.post("", response_model=schemas.ChatResponse)
 async def chat(req: schemas.ChatRequest, request: Request, db: Session = Depends(get_db)):
+    log.info("[ASHRA API] request received user=%s len=%d", req.user_id, len(req.message or ""))
     # Per-user LLM spend cap (stricter than the global per-IP limit).
     check_rate(f"chat:{client_ip(request)}:{req.user_id}", settings.chat_rate_limit_per_minute)
     user = db.query(models.User).filter_by(id=req.user_id).first()
@@ -69,26 +73,53 @@ async def chat(req: schemas.ChatRequest, request: Request, db: Session = Depends
     relevant = memory_engine.retrieve_relevant(user.id, req.message, top_k=3)
     memory_context = "\n".join(f"- [{h['kind']}] {h['content']}" for h in relevant if h.get("content"))
 
-    # --- Phase 4: planner → tools (runs before reply; results join the context) ---
-    tool_steps = planner.plan(req.message)
-    tool_calls, tool_context = agent_exec.execute_plan(db, user.id, tool_steps) if tool_steps else ([], "")
+    # --- Phase 4: planner → tools (non-critical: never block the reply) ---
+    tool_calls, tool_context = [], ""
+    try:
+        tool_steps = planner.plan(req.message)
+        if tool_steps:
+            tool_calls, tool_context = agent_exec.execute_plan(db, user.id, tool_steps)
+    except Exception as e:
+        log.warning("[ASHRA API] planner/tools failed: %s", type(e).__name__)
 
     # --- Phase 4 (automation lite): surface pending reminders ---
-    pending = due_reminders(db, user.id)
-    reminder_context = ("Pending reminders: " + "; ".join(pending)) if pending and len(req.message.split()) < 20 else ""
+    reminder_context = ""
+    try:
+        pending = due_reminders(db, user.id)
+        if pending and len(req.message.split()) < 20:
+            reminder_context = "Pending reminders: " + "; ".join(pending)
+    except Exception as e:
+        log.warning("[ASHRA API] reminders failed: %s", type(e).__name__)
 
     # --- Phase 6: observe entities into knowledge graph + surface active goals ---
-    graph_ents = knowledge_graph.observe(user.id, req.message)
-    goals_active = db.query(models.Goal).filter_by(user_id=user.id, status="active").all()
+    graph_ents = None
+    try:
+        graph_ents = knowledge_graph.observe(user.id, req.message)
+    except Exception as e:
+        log.warning("[ASHRA API] knowledge graph failed: %s", type(e).__name__)
+    goals_active: list = []
+    try:
+        goals_active = db.query(models.Goal).filter_by(user_id=user.id, status="active").all()
+    except Exception as e:
+        log.warning("[ASHRA API] goals query failed: %s", type(e).__name__)
     goal_context = ""
     if goals_active and len(req.message.split()) < 25:
         goal_context = "Active goals: " + "; ".join(
             f"{g.title} ({g.progress or 0}%)" for g in goals_active[:5])
 
-    # --- Phase 3: behaviour analysis → gradual adaptation (before reply so it takes effect now) ---
-    signals = behavior_analyzer.analyze(req.message)
-    adaptations_made = behavior_analyzer.apply_to_profile(profile, signals)
-    db.commit()
+    # --- Phase 3: behaviour analysis → gradual adaptation (non-critical) ---
+    signals: dict = {}
+    adaptations_made: list = []
+    try:
+        signals = behavior_analyzer.analyze(req.message)
+        adaptations_made = behavior_analyzer.apply_to_profile(profile, signals)
+        db.commit()
+    except Exception as e:
+        log.warning("[ASHRA API] behaviour analysis failed: %s", type(e).__name__)
+        try:
+            db.rollback()
+        except Exception:
+            pass
 
     adaptation_text = personality_adapter.directives(profile)
     ctx = ai_core.build_profile_context(profile)
@@ -102,6 +133,10 @@ async def chat(req: schemas.ChatRequest, request: Request, db: Session = Depends
     if goal_context:
         ctx += f"\n{goal_context}"
     reply = await ai_core.generate_reply(req.message, ctx, history, memory_context, adaptation_text)
+    log.info("[ASHRA API] generation completed user=%s reply_len=%d", user.id, len(reply or ""))
+    if not (reply or "").strip():
+        log.warning("[ASHRA API] empty reply, using fallback")
+        reply = "Sorry, I couldn't generate a response. Please try again."
     if tool_calls:
         reply = reply.rstrip() + " 🔧[" + ", ".join(c["tool"] for c in tool_calls) + "]"
     # --- Web images: "what does a banana look like" → inline Commons photos ---

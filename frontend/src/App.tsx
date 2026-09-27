@@ -16,13 +16,16 @@ class ApiError extends Error {
 async function api(path: string, opts?: RequestInit) {
   const headers: Record<string, string> = { 'Content-Type': 'application/json' }
   if (API_KEY) headers['X-API-Key'] = API_KEY
+  console.log('[ASHRA] request started', path)
   let r: Response
   try {
-    r = await fetch(API + path, { ...opts, headers: { ...headers, ...(opts?.headers as Record<string, string> ?? {}) }, signal: AbortSignal.timeout(45000) })
+    r = await fetch(API + path, { ...opts, headers: { ...headers, ...(opts?.headers as Record<string, string> ?? {}) }, signal: AbortSignal.timeout(75000) })
   } catch (e) {
-    if (e instanceof DOMException && e.name === 'TimeoutError') throw new ApiError(0, 'Request timed out after 45s — network stall or sleeping backend. Wait for Render Live and retry.', null)
+    console.log('[ASHRA ERROR]', e instanceof Error ? `${e.name}: ${e.message}` : e)
+    if (e instanceof DOMException && e.name === 'TimeoutError') throw new ApiError(0, 'Request timed out after 75s — backend still working or network stalled. Check back in the chat; the reply lands on revisit.', null)
     throw new ApiError(0, 'Network failed to fetch — check connection / VPN / adblock.', null)
   }
+  console.log('[ASHRA] response status:', r.status, path)
   if (!r.ok) await throwFor(r)
   return r.json()
 }
@@ -281,7 +284,14 @@ function Chat({ convId, sessKey, sess, patchSess, onNewConv, refreshSidebar, onD
       patchSess(key, { busyLabel: '' })
     }
     try {
+      console.log('[ASHRA] sending message')
       const j = await post('/chat', { user_id: USER, conversation_id: convId, message: content, image_context })
+      console.log('[ASHRA] response parsed')
+      if (!j || typeof j.reply !== 'string' || !j.reply.trim()) {
+        console.log('[ASHRA ERROR] invalid response shape', JSON.stringify(j)?.slice(0, 200))
+        throw new Error('Invalid response from backend (missing reply).')
+      }
+      console.log('[ASHRA] rendering response')
       const targetKey = !convId ? j.conversation_id : key
       if (!convId) { onNewConv(j.conversation_id); refreshSidebar() }
       const meta: string[] = []
@@ -294,8 +304,10 @@ function Chat({ convId, sessKey, sess, patchSess, onNewConv, refreshSidebar, onD
         msgs: [...base, userMsg, { role: 'assistant', content: j.reply, meta: meta.join(' · ') || undefined, fresh: true }],
         busy: false, busyLabel: '',
       })
+      console.log('[ASHRA] generation complete')
     } catch (e) {
       const msg = e instanceof Error ? e.message : 'Send failed.'
+      console.log('[ASHRA ERROR]', msg)
       patchSess(key, {
         msgs: [...base, userMsg, { role: 'assistant', content: 'Sorry, master — ' + msg, fresh: true }],
         err: msg, busy: false, busyLabel: '',
