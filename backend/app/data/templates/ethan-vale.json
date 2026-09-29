@@ -1,0 +1,40 @@
+{
+  "id": "ethan-vale",
+  "name": "Ethan Vale",
+  "category": "photography archive",
+  "description": "Wildlife photography archive - black editorial gallery opening on a splash screen and intro film, then a 3D perspective drag-to-rotate grid with a lightbox.",
+  "tags": ["photography", "portfolio", "gallery", "archive", "editorial", "dark", "wildlife", "art", "creative", "lightbox", "images", "documentation"],
+  "palette": {
+    "bg": "#000000 pure black",
+    "text": "#f4f2ef warm off-white",
+    "muted": "off-white at ~60% opacity",
+    "accent": "none - the photographs are the color"
+  },
+  "typography": {
+    "display": "Playfair Display italic for names and titles",
+    "body": "Inter at light weight 300",
+    "note": "serif italic + light grotesque is the whole personality; do not add a third face"
+  },
+  "layout": [
+    "splash: name + 'Field Notes 2026' + progress bar",
+    "intro film with a Skip control",
+    "3D perspective archive grid (drag to rotate)",
+    "lightbox with title / location / field note",
+    "bio aside",
+    "menu: The Archive / Field Notes / Studio / Contact"
+  ],
+  "motion": [
+    "drag-to-rotate perspective grid (perspective ~1150px)",
+    "lightbox open/close",
+    "custom cursor dot",
+    "intro film playback with progress"
+  ],
+  "components": [
+    "perspective gallery grid",
+    "lightbox overlay",
+    "splash loader with progress bar",
+    "grid/list view toggle"
+  ],
+  "voice": "quiet and documentary - first-person field notes, restrained captions, let images lead",
+  "avoid": ["bright backgrounds", "masonry card grids", "loud accent colors", "marketing copy"]
+}
