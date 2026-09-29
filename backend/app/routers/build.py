@@ -18,6 +18,7 @@ from sqlalchemy.orm import Session
 from .. import models
 from ..config import settings
 from ..database import get_db
+from ..services import template_bank, web_images
 
 router = APIRouter(prefix="/build", tags=["build"])
 
@@ -31,9 +32,15 @@ TEMPLATES = {
     "restaurant": "a restaurant site with hero, menu section, and reservation form (front-end only)",
 }
 
-_SYS = ("You are a front-end developer. Output ONLY a complete single HTML file "
+_SYS = ("You are a senior front-end developer. Output ONLY a complete single HTML file "
         "(inline <style> and <script>, no external files except images via URL). "
-        "No markdown fences, no explanations — just the HTML.")
+        "No markdown fences, no explanations - just the HTML. "
+        "When a DESIGN REFERENCE is given, adopt its palette, type, spacing and section "
+        "rhythm, but write original markup and copy for the requested site. "
+        "When IMAGE URLS are given, use only those for <img> and background-image so "
+        "every image actually loads.")
+
+
 
 
 def _pick_template(prompt: str) -> str:
@@ -59,21 +66,45 @@ async def build_website(req: BuildRequest, db: Session = Depends(get_db)):
     template = req.template.strip().lower() or _pick_template(prompt)
     if template not in TEMPLATES:
         template = "landing"
-    # Powerful coder model for builds (falls back to chat model).
-    model = "openai/gpt-oss-120b"
+    # Coder model for builds (heavier than the chat model, overridable via .env).
+    model = (getattr(settings, "build_model", "") or settings.groq_model
+             or "openai/gpt-oss-120b")
+    # Few-shot style retrieval: match the prompt against the template bank and
+    # hand the closest design system to the model. This is how a hosted model
+    # learns from examples - Groq exposes no fine-tuning API.
+    ref = None
+    try:
+        matches = template_bank.best(prompt, top=1)
+        ref = matches[0] if matches else None
+    except Exception:
+        ref = None
+    style_block = template_bank.render(ref)
+    # Real image URLs (Serper/Brave/Pixabay/Pexels/...) so the generated page
+    # never ships links that 404.
+    try:
+        imgs = web_images.search(prompt, limit=6)
+    except Exception:
+        imgs = []
+    user_msg = (
+        f"Build {TEMPLATES[template]}.\nSite idea: {prompt}\n"
+        f"Template: {template}. Keep it polished and responsive.")
+    if style_block:
+        user_msg += "\n\n" + style_block
+    urls = "\n".join(f"- {i.get('thumb')}" for i in imgs if i.get("thumb"))
+    if urls:
+        user_msg += "\n\nIMAGE URLS (use these, and only these, for imagery):\n" + urls
     messages = [
         {"role": "system", "content": _SYS},
-        {"role": "user", "content": (
-            f"Build {TEMPLATES[template]}.\nSite idea: {prompt}\n"
-            f"Template: {template}. Keep it polished and responsive.")},
+        {"role": "user", "content": user_msg},
     ]
+
     try:
         async with httpx.AsyncClient(timeout=120) as c:
             r = await c.post(
                 f"{settings.groq_base_url.rstrip('/')}/chat/completions",
                 headers={"Authorization": f"Bearer {settings.groq_api_key}"},
                 json={"model": model, "messages": messages,
-                      "max_tokens": 4000, "temperature": 0.5,
+                      "max_tokens": 8000, "temperature": 0.5,
                       "reasoning_effort": "medium"},
             )
             r.raise_for_status()
@@ -108,7 +139,7 @@ async def build_website(req: BuildRequest, db: Session = Depends(get_db)):
             db.rollback()
         except Exception:
             pass
-    return {"job_id": job_id, "name": name, "template": template, "html": html, "conversation_id": conv.id if "conv" in locals() else None}
+    return {"job_id": job_id, "name": name, "template": template, "html": html, "style_ref": (ref or {}).get("name", ""), "conversation_id": conv.id if "conv" in locals() else None}
 
 
 @router.get("/zip/{job_id}")
