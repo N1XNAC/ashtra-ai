@@ -1,0 +1,40 @@
+{
+  "id": "jack-3d-creator",
+  "name": "Jack - 3D Creator",
+  "category": "creative portfolio",
+  "description": "Editorial dark portfolio for a 3D creator: uppercase display type, a scrolling marquee strip and scroll-triggered reveals across hero, about, services and projects.",
+  "tags": ["portfolio", "3d", "creative", "designer", "freelance", "dark", "editorial", "projects", "services", "agency", "artist", "showreel"],
+  "palette": {
+    "bg": "#0C0C0C near-black",
+    "text": "#D7E2EA pale blue-grey",
+    "accent": "#B600A8 magenta (selection and highlights)",
+    "gradient": "linear-gradient(180deg,#646973,#BBCCD7)"
+  },
+  "typography": {
+    "display": "Kanit, uppercase, heavy weight, tight leading",
+    "body": "Kanit light/regular",
+    "signature": "magenta text-selection color as a brand moment"
+  },
+  "layout": [
+    "hero with oversized uppercase name/role",
+    "auto-scrolling marquee strip",
+    "about",
+    "services list",
+    "projects grid",
+    "'Let's talk' footer"
+  ],
+  "motion": [
+    "scroll-triggered FadeIn on every section",
+    "magnetic buttons that follow the cursor with an offset",
+    "cycling animated words in the headline",
+    "marquee loop"
+  ],
+  "components": [
+    "magnetic hover button",
+    "live project badge",
+    "infinite marquee",
+    "floating contact button"
+  ],
+  "voice": "direct, confident, first-person creative - short punchy lines, personality over polish",
+  "avoid": ["light themes", "corporate stock photography", "rounded card grids", "centered-everything layouts"]
+}
