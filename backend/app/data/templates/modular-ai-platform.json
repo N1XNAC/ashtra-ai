@@ -1,0 +1,42 @@
+{
+  "id": "modular-ai-platform",
+  "name": "Intelligence Designed To Evolve",
+  "category": "AI platform landing hero",
+  "description": "Modular AI platform designed for production. Black full-bleed video hero with a dot-matrix display headline, a vendor trust pill and a count-up stat footer.",
+  "tags": ["ai", "platform", "enterprise", "b2b", "landing", "hero", "black", "video", "stats", "trust", "saas", "infrastructure", "production"],
+  "palette": {
+    "bg": "#000000 pure black",
+    "text": "#ffffff",
+    "muted": "#8e8e8e",
+    "pill-dark": "#28282a",
+    "trust-text": "#c4c2c3",
+    "trust-border": "rgba(255,255,255,.4)",
+    "nav-shadow": "0 4px 14px rgba(0,0,0,.16)"
+  },
+  "typography": {
+    "display": "dot-matrix pixel display face (Bubbledot / Geist Pixel) for the hero headline only",
+    "body": "Inter / Segoe UI for everything else",
+    "note": "pair a novelty display face with a plain grotesque, never both novelty"
+  },
+  "layout": [
+    "floating pill nav with burger drawer",
+    "black video hero",
+    "two-line dot-matrix headline",
+    "trust pill with vendor logos + 'Trusted by 2000+ Enterprises'",
+    "single primary CTA",
+    "four-stat footer: 120 ms / 99.99% / 24/7 / 2.4 M"
+  ],
+  "motion": [
+    "IntersectionObserver count-up on the stat numbers",
+    "background video loop",
+    "pill nav lift shadow on scroll"
+  ],
+  "components": [
+    "trust pill with icon row",
+    "stat cell with animated count-up",
+    "pill-shaped navigation",
+    "burger drawer"
+  ],
+  "voice": "spec-sheet and quantitative - let the numbers do the talking, minimal adjectives",
+  "avoid": ["long scrolling sections", "script or handwritten type", "light backgrounds", "pricing tables in the hero"]
+}
