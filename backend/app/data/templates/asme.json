@@ -1,0 +1,41 @@
+{
+  "id": "asme",
+  "name": "Asme",
+  "category": "liquid glass landing",
+  "description": "Asme - Know it all. Black liquid-glass landing: a giant serif hero over a full-bleed video, glass pill navigation and an email-subscribe pill, running Hero / About / Featured Video / Philosophy / Services.",
+  "tags": ["landing", "glassmorphism", "serif", "editorial", "black", "video", "newsletter", "curiosity", "modern", "startup", "philosophy", "brand"],
+  "palette": {
+    "bg": "#000000 pure black",
+    "text": "#ffffff",
+    "glass": "backdrop-filter blur with an inset top highlight",
+    "accent": "the background video supplies the color"
+  },
+  "typography": {
+    "display": "Instrument Serif, oversized editorial hero ('Know it all.')",
+    "body": "Inter / system sans, small and neutral",
+    "note": "one giant serif line is the entire hero - no subheadline competition"
+  },
+  "layout": [
+    "liquid-glass pill navigation floating over the hero",
+    "giant serif hero over a full-bleed video",
+    "email-subscribe glass pill",
+    "glass social buttons",
+    "About",
+    "Featured Video",
+    "Philosophy",
+    "Services"
+  ],
+  "motion": [
+    "requestAnimationFrame-driven opacity cross-fade on the hero video",
+    "inset-highlight shimmer on glass surfaces",
+    "gentle section reveals"
+  ],
+  "components": [
+    "liquid-glass pill nav with inset highlight",
+    "email subscribe pill input",
+    "glass social buttons",
+    "full-width video feature block"
+  ],
+  "voice": "curious and aphoristic - short philosophical headlines, almost no body copy",
+  "avoid": ["solid opaque nav bars", "dense feature tables", "sans-serif display headlines", "bright backgrounds"]
+}
