@@ -41,8 +41,6 @@ _SYS = ("You are a senior front-end developer. Output ONLY a complete single HTM
         "every image actually loads.")
 
 
-
-
 def _pick_template(prompt: str) -> str:
     t = prompt.lower()
     for name in TEMPLATES:
