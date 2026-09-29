@@ -1,0 +1,42 @@
+{
+  "id": "vesper-ai",
+  "name": "Vesper.ai",
+  "category": "AI SaaS landing hero",
+  "description": "Vesper.ai - Operational AI Infrastructure. Pure black, minimal AI-SaaS hero with film grain over a background video and a proof-by-numbers stats footer.",
+  "tags": ["ai", "saas", "b2b", "infrastructure", "landing", "hero", "minimal", "black", "enterprise", "startup", "video", "agents", "workflow"],
+  "palette": {
+    "bg": "#000000 pure black",
+    "text": "#ffffff",
+    "muted": "#9a9a9a",
+    "stat": "#d8d8d8",
+    "border": "rgba(255,255,255,.16)",
+    "border-soft": "rgba(255,255,255,.12)"
+  },
+  "typography": {
+    "display": "Inter, 48-64px headline with tight tracking",
+    "accent": "Instrument Serif italic for one or two emphasis words inside the headline",
+    "body": "Inter 15.5-18px, muted grey lede"
+  },
+  "layout": [
+    "top nav: wordmark left, links center, CTA right",
+    "small badge chip above the headline",
+    "masked headline with italic serif emphasis",
+    "one-line lede (max ~470px)",
+    "dual CTA row",
+    "stats footer: 3 metric cells with custom SVG icons"
+  ],
+  "motion": [
+    "film-grain overlay across the whole page",
+    "background video loop behind the hero",
+    "staggered appear delays driven by a --d custom property",
+    "masked headline reveal"
+  ],
+  "components": [
+    "badge chip",
+    "primary solid + ghost CTA pair",
+    "stat cell with bespoke line-art SVG icon",
+    "hairline-bordered cards (12-16% white)"
+  ],
+  "voice": "technical and credible - the headline makes a claim, the stats footer proves it",
+  "avoid": ["colorful gradients", "serif body copy", "cluttered heroes", "testimonial carousels"]
+}
