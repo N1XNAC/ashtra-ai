@@ -642,9 +642,10 @@ function BuildPanel() {
     const t1 = setTimeout(() => push('> polishing…'), 10000)
     const t2 = setTimeout(() => push('> final touches…'), 22000)
     try {
-      const j = await api('/build/website', { method: 'POST', body: JSON.stringify({ user_id: USER, prompt: p }) }, 150000) as { job_id: string; name: string; template: string; html: string }
+      const j = await api('/build/website', { method: 'POST', body: JSON.stringify({ user_id: USER, prompt: p }) }, 150000) as { job_id: string; name: string; template: string; html: string; style_ref?: string }
       setHtml(j.html); setJobId(j.job_id)
       push(`> template: ${j.template}`)
+      if (j.style_ref) push(`> style: ${j.style_ref}`)
       push(`> done: ${j.name} (${(j.html.length / 1024).toFixed(1)} KB) — preview or download below.`)
     } catch (e) {
       push(`> error: ${e instanceof Error ? e.message : 'build failed'}`)
