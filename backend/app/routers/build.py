@@ -3,7 +3,9 @@
 POST /build/website → LLM writes a single-file site from a template.
 GET  /build/zip/{job_id} → download it as website.zip (index.html).
 """
+import asyncio
 import io
+import logging
 import re
 import time
 import uuid
@@ -21,6 +23,7 @@ from ..database import get_db
 from ..services import template_bank, web_images
 
 router = APIRouter(prefix="/build", tags=["build"])
+_log = logging.getLogger("ashtra.build")
 
 _JOBS: dict[str, dict] = {}  # job_id → {name, html} (single worker, ephemeral)
 
@@ -55,6 +58,28 @@ class BuildRequest(BaseModel):
     template: str = ""
 
 
+@router.get("/templates")
+def list_templates():
+    """Which style cards Build & Run can retrieve from (diagnostics + UI picker)."""
+    try:
+        cards = template_bank.load()
+    except Exception as e:
+        return {"dir": str(template_bank._DIR), "count": -1,
+                "error": f"{type(e).__name__}: {e}", "cards": []}
+    return {
+        "dir": str(template_bank._DIR),
+        "count": len(cards),
+        "scoring": {
+            "min_score": template_bank.MIN_SCORE,
+            "min_margin": template_bank.MIN_MARGIN,
+            "min_tag_coverage": template_bank.MIN_TAG_COVERAGE,
+            "tag_weight": template_bank.TAG_WEIGHT,
+        },
+        "cards": [{"id": c.get("id"), "name": c.get("name"),
+                   "category": c.get("category")} for c in cards],
+    }
+
+
 @router.post("/website")
 async def build_website(req: BuildRequest, db: Session = Depends(get_db)):
     _ = db  # reserved for future persistence
@@ -72,9 +97,14 @@ async def build_website(req: BuildRequest, db: Session = Depends(get_db)):
     # learns from examples - Groq exposes no fine-tuning API.
     ref = None
     try:
+        cards = template_bank.load()
         matches = template_bank.best(prompt, top=1)
         ref = matches[0] if matches else None
-    except Exception:
+        if not ref:
+            _log.info("style retrieval: %d cards available, no match for %r",
+                      len(cards), prompt[:60])
+    except Exception as e:
+        _log.warning("style retrieval failed: %s", type(e).__name__)
         ref = None
     style_block = template_bank.render(ref)
     # Real image URLs (Serper/Brave/Pixabay/Pexels/...) so the generated page
@@ -96,22 +126,51 @@ async def build_website(req: BuildRequest, db: Session = Depends(get_db)):
         {"role": "user", "content": user_msg},
     ]
 
+    payload = {"model": model, "messages": messages,
+               "max_tokens": 8000, "temperature": 0.5,
+               "reasoning_effort": "medium"}
+    html = ""
+    finish_reason = ""
+    resp_status = 0
+    resp_body = ""
     try:
         async with httpx.AsyncClient(timeout=120) as c:
-            r = await c.post(
-                f"{settings.groq_base_url.rstrip('/')}/chat/completions",
-                headers={"Authorization": f"Bearer {settings.groq_api_key}"},
-                json={"model": model, "messages": messages,
-                      "max_tokens": 8000, "temperature": 0.5,
-                      "reasoning_effort": "medium"},
-            )
-            r.raise_for_status()
-            html = r.json()["choices"][0]["message"]["content"] or ""
+            r = None
+            for attempt in (1, 2):
+                r = await c.post(
+                    f"{settings.groq_base_url.rstrip('/')}/chat/completions",
+                    headers={"Authorization": f"Bearer {settings.groq_api_key}"},
+                    json=payload,
+                )
+                # Free tiers blip with 429s; a single retry costs nothing.
+                if r.status_code in (429, 500, 502, 503) and attempt == 1:
+                    _log.warning("build model %s -> %s, retrying once", model, r.status_code)
+                    await asyncio.sleep(3)
+                    continue
+                break
+            resp_status = r.status_code
+            resp_body = r.text[:300]
+            if r.status_code < 400:
+                choice = ((r.json() or {}).get("choices") or [{}])[0]
+                finish_reason = choice.get("finish_reason") or ""
+                html = (choice.get("message") or {}).get("content") or ""
     except Exception as e:
-        raise HTTPException(status_code=502, detail=f"Build model call failed: {type(e).__name__}")
+        _log.warning("build model call failed: %s", type(e).__name__)
+        raise HTTPException(status_code=502,
+                            detail=f"Build model call failed: {type(e).__name__}")
+    if resp_status >= 400 or not html:
+        _log.warning("build model %s -> %s: %s", model, resp_status, resp_body)
+        raise HTTPException(status_code=502,
+                            detail=f"Build model call failed: HTTP {resp_status} ({resp_body[:120]})")
     html = re.sub(r"^```html\s*|\s*```$", "", html.strip())
     if "<html" not in html.lower():
         raise HTTPException(status_code=502, detail="Model did not return HTML. Try again.")
+    # finish_reason == "length" means the token budget ran out mid-document,
+    # which ships a page that is missing </html> and often its closing tags.
+    truncated = finish_reason == "length" or "</html>" not in html.lower()
+    if truncated:
+        _log.warning("build output truncated (finish_reason=%s, %d chars)",
+                     finish_reason, len(html))
     name = re.sub(r"[^a-z0-9]+", "-", prompt.lower()).strip("-")[:40] or "site"
     job_id = uuid.uuid4().hex[:12]
     _JOBS[job_id] = {"name": name, "html": html, "ts": time.time()}
@@ -137,7 +196,9 @@ async def build_website(req: BuildRequest, db: Session = Depends(get_db)):
             db.rollback()
         except Exception:
             pass
-    return {"job_id": job_id, "name": name, "template": template, "html": html, "style_ref": (ref or {}).get("name", ""), "conversation_id": conv.id if "conv" in locals() else None}
+    return {"job_id": job_id, "name": name, "template": template, "html": html,
+            "style_ref": (ref or {}).get("name", ""), "truncated": truncated,
+            "conversation_id": conv.id if "conv" in locals() else None}
 
 
 @router.get("/zip/{job_id}")
