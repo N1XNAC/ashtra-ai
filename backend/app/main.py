@@ -75,7 +75,7 @@ async def lifespan(app: FastAPI):
     task.cancel()
 
 
-app = FastAPI(title="Ashtra AI — Phase 6",
+app = FastAPI(title="azx AI — Phase 6",
               docs_url="/docs" if settings.docs_enabled else None,
               redoc_url=None,
               openapi_url="/openapi.json" if settings.docs_enabled else None,

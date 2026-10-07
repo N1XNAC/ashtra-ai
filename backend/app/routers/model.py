@@ -3,7 +3,7 @@
 Conversation → Feedback → Evaluation → Training Dataset → Fine Tuning.
 - POST /feedback — rate a reply (feeds future training)
 - GET /model/dataset — corpus stats preview
-- POST /model/train — train from scratch on Ashtra data
+- POST /model/train — train from scratch on azx data
 - POST /model/fine-tune — continue training (feedback-weighted)
 - GET /model/status — checkpoint, perplexity, config
 - POST /model/generate — direct local-inference test

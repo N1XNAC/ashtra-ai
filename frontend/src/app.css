@@ -1,4 +1,4 @@
-/* Ashtra — Minimal Fluid Glass.
+/* azx — Minimal Fluid Glass.
    Glass lives ONLY on: topbar (sticky nav), floating composer, active/hover
    interactive cards, dialogs/sheets. Content surfaces stay solid + calm.
    Motion is event-driven (mount/press/focus), spring-eased, GPU-only
@@ -443,7 +443,7 @@ input[type="range"] { width: 100%; accent-color: var(--accent); }
 .termline { color: var(--text, #f5f5f5); padding: 2px 0; overflow-wrap: anywhere; }
 .buildrow { display: flex; gap: 8px; margin: 10px 0; }
 .previewframe { width: 100%; min-height: 420px; border: 1px solid #262626; border-radius: 12px; background: #fff; }
-/* ---------- Uiverse-style composer (adapted for Ashtra) ---------- */
+/* ---------- Uiverse-style composer (adapted for azx) ---------- */
 .uv-chatbot { display: flex; flex-direction: column; width: 100%; }
 .uv-chatbot .uv-chat-options { position: relative; display: flex; background: linear-gradient(to bottom right, #7e7e7e, #363636, #363636, #363636, #363636); border-radius: 16px; padding: 1.5px; overflow: hidden; }
 .uv-chatbot .uv-chat-options::after { position: absolute; content: ""; top: -10px; left: -10px; background: radial-gradient(ellipse at center, #ffffff, rgba(255,255,255,0.3), rgba(255,255,255,0.1), rgba(0,0,0,0), rgba(0,0,0,0), rgba(0,0,0,0), rgba(0,0,0,0)); width: 30px; height: 30px; filter: blur(1px); pointer-events: none; }

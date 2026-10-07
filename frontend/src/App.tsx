@@ -224,7 +224,6 @@ function ThreadShell({ msgs, busy, status, empty, composer, footer, actionIndex,
         <div className="thread-inner">
           {msgs === null ? (
             <div className="msg">
-              <div className="avatar">A</div>
               <div className="body"><div className="typing"><i /><i /><i /></div></div>
             </div>
           ) : msgs.length === 0 && !busy ? empty : null}
@@ -237,9 +236,7 @@ function ThreadShell({ msgs, busy, status, empty, composer, footer, actionIndex,
             </div>
           ) : (
             <div key={i} className={m.fresh ? 'msg fresh' : 'msg'}>
-              <div className="avatar">A</div>
               <div className="body">
-                <div className="who">Ashtra</div>
                 <div className="md" dangerouslySetInnerHTML={{ __html: renderMd(m.content) }} />
                 {actionIndex === i ? action : null}
                 {(m.meta || true) && (
@@ -255,7 +252,6 @@ function ThreadShell({ msgs, busy, status, empty, composer, footer, actionIndex,
           ))}
           {busy && (
             <div className="msg">
-              <div className="avatar">A</div>
               <div className="body">
                 <div className="typing"><i /><i /><i /></div>
                 <div className="lab" style={{ marginTop: 2 }}>{status}</div>
@@ -447,7 +443,7 @@ function Chat({ convId, sessKey, sess, patchSess, onNewConv, refreshSidebar, onD
   const welcome = (
     <div className="welcome">
       <h1>What can I do for you, master?</h1>
-      <p>Ashtra remembers, plans, and acts — powered by open-source AI.</p>
+      <p>azx remembers, plans, and acts — powered by open-source AI.</p>
       <div className="suggest">
         {SUGGESTIONS.map(s => (
           <button key={s.t} className="sug" onClick={() => send(s.s)}>
@@ -506,14 +502,14 @@ function Chat({ convId, sessKey, sess, patchSess, onNewConv, refreshSidebar, onD
             ref={taRef} rows={1} value={input} maxLength={MAXLEN + 100}
             onChange={e => { patchSess(sessKey, { input: e.target.value }); autosize() }}
             onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send() } }}
-            placeholder="Message Ashtra…" />
+            placeholder="Message azx…" />
         }
         canSend={!(busy || cached === null || (!input.trim() && !attach))}
         onSend={() => send()} sendLabel="Send" />
       }
       footer={<>
         {siteOpen && site && <SiteModal html={site.html} onClose={() => setSiteOpen(false)} onDownload={downloadZip} />}
-        <div className="hint">Ashtra can make mistakes. Memories are transparent and exportable.</div>
+        <div className="hint">azx can make mistakes. Memories are transparent and exportable.</div>
       </>} />
   )
 }
@@ -561,7 +557,7 @@ function Sidebar({ view, setView, convId, setConvId, convs, onNew, onDelete, onD
       {open && <div className="scrim" onClick={close} />}
       <div className={`side${open ? ' open' : ''}`}>
         <div className="drawer-top">
-          <img src="/logo.png" alt="Ashtra" className="applogo"
+          <img src="/logo.png" alt="azx" className="applogo"
             onError={e => { (e.target as HTMLImageElement).style.display = 'none' }} />
           <div className="drawer-top-r">
             <button className="iconbtn" aria-label="Close menu" onClick={close}><Icon name="x" size={21} /></button>
@@ -677,7 +673,7 @@ function ScheduledPanel() {
   return (
     <div className="panel"><div className="panel-inner">
       <h2>Scheduled</h2>
-      <p className="desc">Ask now — Ashtra replies in a new chat at the set time.</p>
+      <p className="desc">Ask now — azx replies in a new chat at the set time.</p>
       <div className="toolbar">
         <input value={prompt} maxLength={500} onChange={e => setPrompt(e.target.value)} placeholder="Message for later…" />
         <input type="datetime-local" value={when} onChange={e => setWhen(e.target.value)} aria-label="When" />
@@ -854,7 +850,7 @@ function BuildPanel({ seed, onConsumed }: { seed?: string; onConsumed?: () => vo
   return (
     <ThreadShell msgs={msgs} busy={busy} status="Working…"
       empty={<div className="welcome"><h1>Build &amp; Run</h1>
-        <p>Describe a website — Ashtra codes it, then you preview and download the zip.</p></div>}
+        <p>Describe a website — azx codes it, then you preview and download the zip.</p></div>}
       actionIndex={doneIdx}
       action={html ? <button className="mini" onClick={() => setSiteOpen(true)}>Preview</button> : null}
       composer={
@@ -892,11 +888,11 @@ function MemoryPanel() {
   return (
     <div className="panel"><div className="panel-inner">
       <h2>Memory</h2>
-      <p className="desc">Everything Ashtra remembers. Search, delete, reindex, or export.</p>
+      <p className="desc">Everything azx remembers. Search, delete, reindex, or export.</p>
       <div className="toolbar">
         <input value={q} onChange={e => search(e.target.value)} placeholder="Search memories…" />
       </div>
-      {rows.length === 0 && <div className="card">No memories yet, master. Chat, and Ashtra will remember.</div>}
+      {rows.length === 0 && <div className="card">No memories yet, master. Chat, and azx will remember.</div>}
       {rows.map((m, i) => (
         <div key={hits ? i : (m as Mem).id} className="card">
           <div className="row">
@@ -916,7 +912,7 @@ function MemoryPanel() {
         }}>Export JSON</button>
       </div>
       {confirmDel && (
-        <ConfirmDialog title="Forget this memory?" body="Ashtra will no longer recall it. This cannot be undone."
+        <ConfirmDialog title="Forget this memory?" body="azx will no longer recall it. This cannot be undone."
           confirmLabel="Forget" onCancel={() => setConfirmDel(null)}
           onConfirm={async () => { await api(`/memories/${confirmDel}`, { method: 'DELETE' }); setConfirmDel(null); load() }} />
       )}
@@ -1145,7 +1141,7 @@ function YouPanel({ name, onName }: { name: string; onName: (v: string) => void 
   return (
     <div className="panel"><div className="panel-inner">
       <h2>You</h2>
-      <p className="desc">How Ashtra adapts to you. Confidence {String(model?.adaptation.confidence ?? '…')}.</p>
+      <p className="desc">How azx adapts to you. Confidence {String(model?.adaptation.confidence ?? '…')}.</p>
       <div className="lab">What should we call you?</div>
       <input className="namepill" value={name} maxLength={32} placeholder="Type a name…"
         onChange={e => { onName(e.target.value); try { localStorage.setItem('ashtra-name', e.target.value) } catch { /* quota */ } }} />
@@ -1182,7 +1178,7 @@ function SettingsPanel({ fx, setFx }: { fx: boolean; setFx: (v: boolean) => void
         <button className="mini danger-solid" onClick={() => setConfirm(true)}>Clear</button>
       </div>
       <div className="lab">About</div>
-      <div className="card">Ashtra AI · local session. Backend {API.replace(/^https?:\/\//, '')}</div>
+      <div className="card">azx AI · local session. Backend {API.replace(/^https?:\/\//, '')}</div>
       {confirm && (
         <ConfirmDialog title="Clear local data?" body="Saved chats and build drafts stored on this device will be removed."
           confirmLabel="Clear" onCancel={() => setConfirm(false)}
@@ -1298,7 +1294,7 @@ export default function App() {
     setConvId(id)
   }
 
-  const titles: Record<View, string> = { chat: 'Ashtra', library: 'Library', projects: 'Projects', scheduled: 'Scheduled', plugins: 'Plugins', build: 'Build & Run', market: 'Web market', memory: 'Memory', goals: 'Goals', you: 'You', settings: 'Settings' }
+  const titles: Record<View, string> = { chat: 'azx', library: 'Library', projects: 'Projects', scheduled: 'Scheduled', plugins: 'Plugins', build: 'Build & Run', market: 'Web market', memory: 'Memory', goals: 'Goals', you: 'You', settings: 'Settings' }
   /* Build & Run always opens a brand-new build chat (like New chat) */
   function startFreshBuild() {
     try { localStorage.removeItem('ashtra-build-v1') } catch { /* quota */ }
@@ -1337,7 +1333,7 @@ export default function App() {
             setConvId(k === 'new' || k === '__draft' ? null : k); setView('chat')
           }}>
             <span className="dot" />
-            Ashtra is working in {busyTitle(busyOthers[0][0])}
+            azx is working in {busyTitle(busyOthers[0][0])}
             {busyOthers.length > 1 ? ` (+${busyOthers.length - 1})` : ''}…
           </button>
         )}

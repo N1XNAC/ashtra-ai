@@ -1,7 +1,7 @@
 from pydantic_settings import BaseSettings
 
 class Settings(BaseSettings):
-    app_name: str = "Ashtra AI"
+    app_name: str = "azx AI"
     database_url: str = "sqlite:///./ashtray_dev.db"
     # Phase 1: pluggable AI. Set OPENAI_BASE_URL + OPENAI_API_KEY for real model,
     # else falls back to echo adapter (local dev, no key needed).
