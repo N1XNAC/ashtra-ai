@@ -1,0 +1,41 @@
+{
+  "id": "orbit",
+  "name": "Orbit",
+  "category": "futuristic single-screen hero",
+  "description": "Orbit - See beyond now. Pure-black single-screen hero with glassmorphism floating over a full-screen sky video.",
+  "tags": ["space", "futuristic", "glassmorphism", "hero", "dark", "black", "video", "saas", "startup", "single screen", "sci-fi", "immersive"],
+  "palette": {
+    "bg": "#000000 pure black",
+    "ink": "#ffffff",
+    "ink-sub": "rgba(255,255,255,.50)",
+    "ink-nav": "rgba(255,255,255,.91)",
+    "glass-bg": "rgba(255,255,255,.12)",
+    "glass-line": "rgba(255,255,255,.15)",
+    "hairline": "rgba(255,255,255,.98)"
+  },
+  "typography": {
+    "body": "Inter variable, light weight, generous tracking",
+    "display": "Inter, very large and airy, near-thin weight",
+    "labels": "Inter uppercase micro-labels at 50% white"
+  },
+  "layout": [
+    "orbit-ring brand mark top-left",
+    "centered eyebrow + two-word headline + soft subline",
+    "ghost + solid CTA pair",
+    "slide-down full-screen menu sheet on mobile"
+  ],
+  "motion": [
+    "masked line-by-line headline reveal",
+    "reveal easing cubic-bezier(.18,.85,.26,1)",
+    "soft rise transitions cubic-bezier(.22,1,.36,1)",
+    "full-screen background video loop"
+  ],
+  "components": [
+    "glass pill button (12% white + hairline border)",
+    "ghost outline button",
+    "full-bleed video backdrop",
+    "slide-down nav sheet"
+  ],
+  "voice": "minimal, cosmic, aspirational - a two-word headline with one quiet subline",
+  "avoid": ["scrollable multi-section layout", "opaque solid cards", "warm color accents", "heavy borders"]
+}

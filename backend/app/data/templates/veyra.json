@@ -1,0 +1,39 @@
+{
+  "id": "veyra",
+  "name": "VEYRA",
+  "category": "automotive product showcase",
+  "description": "VEYRA - Electric, inside out. Interactive EV configurator: a hero vehicle stage, hover-swapped feature videos, appearance swatches for paint and wheels, and technical callouts.",
+  "tags": ["automotive", "car", "ev", "electric vehicle", "product", "configurator", "interactive", "showcase", "dark", "technology", "hardware", "launch"],
+  "palette": {
+    "bg": "deep near-black graphite",
+    "text": "#ffffff",
+    "surface": "graphite panels with subtle hairlines",
+    "accents": "product swatches only - sky-blue, lime-green, electric-green, graphite"
+  },
+  "typography": {
+    "display": "tight modern grotesk, oversized lowercase headlines",
+    "body": "system sans, small and technical",
+    "micro": "uppercase tracked spec labels"
+  },
+  "layout": [
+    "hero with model name + one-line tagline",
+    "interactive vehicle stage",
+    "appearance menu: paint and wheel swatches",
+    "hover-video feature sections (e.g. hood, battery)",
+    "spec/tech callout markers over the product",
+    "footer"
+  ],
+  "motion": [
+    "hover-triggered video swap, forward and reverse",
+    "live re-render when a colour/wheel swatch is picked",
+    "smooth transitions between feature sections"
+  ],
+  "components": [
+    "appearance selector with circular swatches",
+    "hover-video card",
+    "spec callout markers",
+    "sticky product stage"
+  ],
+  "voice": "reductive product marketing - short spec-led lines, lead with the tagline 'Electric, inside out.'",
+  "avoid": ["dealership-style spec tables", "bright showroom photography", "long prose paragraphs", "multiple CTAs"]
+}

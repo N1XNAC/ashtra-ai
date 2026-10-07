@@ -806,22 +806,43 @@ function BuildPanel({ seed, onConsumed }: { seed?: string; onConsumed?: () => vo
   async function run() {
     const p = prompt.trim()
     if (!p || busy) return
-    setBusy(true); setHtml(''); setJobId(''); setSiteOpen(false); setPrompt('')
-    push(`$ build "${p.length > 60 ? p.slice(0, 60) + '…' : p}"`)
-    push('> coding…')
-    const t1 = setTimeout(() => push('> polishing…'), 10000)
-    const t2 = setTimeout(() => push('> final touches…'), 22000)
+    setBusy(true); setSiteOpen(false); setPrompt('')
+    // html/jobId are deliberately NOT cleared here. Clearing them wrote '' straight
+    // to localStorage, so a failed build — or simply closing this panel while a
+    // build was in flight, which makes React drop the setState after unmount —
+    // destroyed the only copy of the site and the Preview button with it.
+    const baseLog = log
+    const lines: string[] = []
+    const say = (s: string) => { lines.push(s); setLog(l => [...l.slice(-50), s]) }
+    /* written straight to storage so the result survives the panel being closed */
+    const persist = (next: { html?: string; jobId?: string }) => {
+      try {
+        localStorage.setItem('ashtra-build-v1', JSON.stringify({
+          log: [...baseLog, ...lines].slice(-50),
+          html: next.html ?? html,
+          jobId: next.jobId ?? jobId,
+        }))
+      } catch { /* quota */ }
+    }
+    say(`$ build "${p.length > 60 ? p.slice(0, 60) + '…' : p}"`)
+    say('> coding…')
+    const t1 = setTimeout(() => say('> polishing…'), 10000)
+    const t2 = setTimeout(() => say('> final touches…'), 22000)
     try {
-      const j = await api('/build/website', { method: 'POST', body: JSON.stringify({ user_id: USER, prompt: p }) }, 200000) as { status?: string; reply?: string; job_id: string; name: string; template: string; html: string }
+      const j = await api('/build/website', { method: 'POST', body: JSON.stringify({ user_id: USER, prompt: p }) }, 200000) as { status?: string; reply?: string; job_id: string; name: string; template: string; html: string; style_ref?: string }
       if (j.status === 'chat' || !j.job_id) {
-        push(j.reply || 'Tell me what website you want built.')
+        say(j.reply || 'Tell me what website you want built.')
+        persist({})
       } else {
+        say(`> template: ${j.template}`)
+        if (j.style_ref) say(`> style: ${j.style_ref}`)
+        say(`> done: ${j.name} (${(j.html.length / 1024).toFixed(1)} KB) — preview or download below.`)
+        persist({ html: j.html, jobId: j.job_id })
         setHtml(j.html); setJobId(j.job_id)
-        push(`> template: ${j.template}`)
-        push(`> done: ${j.name} (${(j.html.length / 1024).toFixed(1)} KB) — preview or download below.`)
       }
     } catch (e) {
-      push(`> error: ${e instanceof Error ? e.message : 'build failed'}`)
+      say(`> error: ${e instanceof Error ? e.message : 'build failed'}`)
+      persist({})
     }
     clearTimeout(t1); clearTimeout(t2)
     setBusy(false)
@@ -846,7 +867,13 @@ function BuildPanel({ seed, onConsumed }: { seed?: string; onConsumed?: () => vo
   const msgs: Msg[] = log.map(l => l.startsWith('$ ')
     ? { role: 'user', content: l.slice(2) }
     : { role: 'assistant', content: l })
-  const doneIdx = html ? msgs.map((m, i) => m.role === 'assistant' ? i : -1).filter(i => i >= 0).pop() ?? null : null
+  /* Anchor the Preview button to the `> done:` line of the build whose HTML we
+     actually hold. Keying off "last assistant message" pointed it at "> coding…"
+     while a new build was running. */
+  let doneIdx: number | null = null
+  if (html) for (let i = log.length - 1; i >= 0; i--) {
+    if (log[i].startsWith('> done:')) { doneIdx = i; break }
+  }
   return (
     <ThreadShell msgs={msgs} busy={busy} status="Working…"
       empty={<div className="welcome"><h1>Build &amp; Run</h1>

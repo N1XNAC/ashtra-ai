@@ -1,0 +1,41 @@
+{
+  "id": "planet-jumping",
+  "name": "Planet Jumping",
+  "category": "immersive single-page experience",
+  "description": "Single-page immersive space portal: preloader with a percentage counter, a canvas scene, planet background videos and a custom orbit cursor. No scrolling.",
+  "tags": ["space", "immersive", "experience", "interactive", "dark", "canvas", "experimental", "cursor", "single page", "webgl", "portal", "sci-fi"],
+  "palette": {
+    "bg": "#090807 warm near-black",
+    "text": "#ffffff",
+    "muted": "warm dark grey for captions",
+    "accent": "carried by the planetary video imagery rather than a flat hex"
+  },
+  "typography": {
+    "display": "system geometric sans (SF Pro / Aalto lineage), very large planet names",
+    "body": "system UI stack - deliberately no webfonts",
+    "micro": "uppercase tracked labels for facts"
+  },
+  "layout": [
+    "preloader with % counter and video",
+    "canvas scene as the persistent backdrop",
+    "selectable planet list",
+    "<dl> fact grid per planet",
+    "huge planet title (e.g. MARS)",
+    "'Next: Earth' portal button"
+  ],
+  "motion": [
+    "custom cursor: orbit ring + dot + label",
+    "transition video layer between planets",
+    "page scroll disabled (overflow hidden)",
+    "preloader percentage count"
+  ],
+  "components": [
+    "preloader counter",
+    "planet switcher",
+    "definition-list fact grid",
+    "portal/next button",
+    "custom cursor"
+  ],
+  "voice": "immersive and editorial - short labels and captions sitting over cinematic visuals",
+  "avoid": ["standard top nav bars", "scroll-based storytelling", "light UI", "long paragraphs"]
+}

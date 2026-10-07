@@ -1,0 +1,45 @@
+{
+  "id": "meridian",
+  "name": "Meridian",
+  "category": "fintech landing hero",
+  "description": "Meridian - Move payments forward together. Near-black navy fintech hero with a full-bleed parallax background video and a staged, word-by-word headline reveal.",
+  "tags": ["fintech", "payments", "banking", "b2b", "landing", "hero", "dark", "navy", "video background", "saas", "startup", "enterprise"],
+  "palette": {
+    "bg": "#020816 near-black navy",
+    "glass": "rgba(51,52,74,.6) with 14px blur",
+    "navy": "rgba(45,56,92,.85)",
+    "accent": "#f2b380 peach",
+    "cta": "#f93f28 red-orange",
+    "peach-ink": "#331200",
+    "display": "#f6f8fc",
+    "body": "#cfd3e0",
+    "chip": "#c9ccd4",
+    "rail": "#989eac"
+  },
+  "typography": {
+    "display": "geometric sans (Avant Garde / Century Gothic lineage), tight -0.055em cap shift",
+    "body": "clean grotesque sans (Helvetica Neue lineage)",
+    "mono": "monospace for eyebrow labels and micro-copy"
+  },
+  "layout": [
+    "brand mark + MORE pill chrome, no full nav bar",
+    "full-bleed hero video on a scaled 1280x800 stage",
+    "single-sentence display headline",
+    "one supporting lede line",
+    "primary + secondary CTA pair"
+  ],
+  "motion": [
+    "staged entrance: elements animate from --nx/--ny offsets in sequence",
+    "word-by-word headline reveal",
+    "clip-path wipe on buttons",
+    "parallax video playback tied to scroll/pointer"
+  ],
+  "components": [
+    "pill nav button",
+    "outlined chip/pill",
+    "two-button CTA row",
+    "glass panel with backdrop blur"
+  ],
+  "voice": "confident and institutional - one short declarative headline plus a single supporting line, no feature dump",
+  "avoid": ["light backgrounds", "serif display type", "dense multi-column feature grids", "emoji"]
+}

@@ -3,7 +3,9 @@
 POST /build/website → LLM writes a single-file site from a template.
 GET  /build/zip/{job_id} → download it as website.zip (index.html).
 """
+import asyncio
 import io
+import logging
 import re
 import time
 import uuid
@@ -18,8 +20,10 @@ from sqlalchemy.orm import Session
 from .. import models
 from ..config import settings
 from ..database import get_db
+from ..services import template_bank, web_images
 
 router = APIRouter(prefix="/build", tags=["build"])
+_log = logging.getLogger("ashtra.build")
 
 _JOBS: dict[str, dict] = {}  # job_id → {name, html} (single worker, ephemeral)
 
@@ -32,17 +36,20 @@ TEMPLATES = {
 }
 
 _SYS = ("You are a senior front-end developer. Output ONLY a complete single HTML file "
-        "(inline <style> and <script>, no external files except images via CDN URLs like "
-        "charting libs — those must be real <script src> tags, never left as comments). "
+        "(inline <style> and <script>; external URLs only for images and real CDN "
+        "<script src> tags — never left as comments). "
         "No markdown fences, no explanations — just the HTML. "
         "Hard rules: every section fully implemented; never leave placeholder comments, "
         "TODOs, or empty script blocks — if a chart, animation, or function is required, "
         "write the real working code; responsive on mobile; visually polished. "
+        "When a DESIGN REFERENCE is given, adopt its palette, type, spacing and section "
+        "rhythm, but write original markup and copy for the requested site. "
         "BLANK-PAGE RULES (critical): (1) All main content must be fully visible WITHOUT "
         "JavaScript — never start sections at opacity:0 or off-screen transforms waiting "
         "for a script; JS may only enhance already-visible content. (2) Set an explicit "
         "background-color on html, body AND every section so nothing can render as a "
-        "blank black or white void. (3) Images: use ONLY https://picsum.photos/... or "
+        "blank black or white void. (3) Images: when IMAGE URLS are given, use only those "
+        "for <img> and background-image; otherwise use ONLY https://picsum.photos/... or "
         "https://placehold.co/... or CSS gradients / inline SVG data-URIs — NEVER "
         "via.placeholder.com or other unreliable hosts. (4) Check your own HTML: if an "
         "element could be invisible on load, fix it before answering. "
@@ -209,6 +216,28 @@ def _clean(html: str) -> str:
     return re.sub(r"^```html\s*|\s*```$", "", html.strip())
 
 
+@router.get("/templates")
+def list_templates():
+    """Which style cards Build & Run can retrieve from (diagnostics + UI picker)."""
+    try:
+        cards = template_bank.load()
+    except Exception as e:
+        return {"dir": str(template_bank._DIR), "count": -1,
+                "error": f"{type(e).__name__}: {e}", "cards": []}
+    return {
+        "dir": str(template_bank._DIR),
+        "count": len(cards),
+        "scoring": {
+            "min_score": template_bank.MIN_SCORE,
+            "min_margin": template_bank.MIN_MARGIN,
+            "min_tag_coverage": template_bank.MIN_TAG_COVERAGE,
+            "tag_weight": template_bank.TAG_WEIGHT,
+        },
+        "cards": [{"id": c.get("id"), "name": c.get("name"),
+                   "category": c.get("category")} for c in cards],
+    }
+
+
 @router.post("/website")
 async def build_website(req: BuildRequest, db: Session = Depends(get_db)):
     prompt = req.prompt.strip()
@@ -233,15 +262,47 @@ async def build_website(req: BuildRequest, db: Session = Depends(get_db)):
     if ref_key in REFERENCES:
         ref_line = (f"\nDesign reference ({ref_key}): match its mood, layout rhythm and "
                     f"typography feel — {REFERENCES[ref_key]}. Do NOT copy its text or brand.")
-    # Powerful coder model for builds (falls back to chat model).
-    model = "openai/gpt-oss-120b"
+    # Coder model for builds (heavier than the chat model, overridable via .env).
+    model = (getattr(settings, "build_model", "") or settings.groq_model
+             or "openai/gpt-oss-120b")
+    # Few-shot style retrieval: match the prompt against the template bank and
+    # hand the closest design system to the model. This is how a hosted model
+    # learns from examples - Groq exposes no fine-tuning API. Only used when the
+    # intake didn't already pick a REFERENCES design above.
+    ref = None
+    if ref_key == "none":
+        try:
+            cards = template_bank.load()
+            matches = template_bank.best(prompt, top=1)
+            ref = matches[0] if matches else None
+            if not ref:
+                _log.info("style retrieval: %d cards available, no match for %r",
+                          len(cards), prompt[:60])
+        except Exception as e:
+            _log.warning("style retrieval failed: %s", type(e).__name__)
+            ref = None
+    style_block = template_bank.render(ref)
+    # Real image URLs (Serper/Brave/Pixabay/Pexels/...) so the generated page
+    # never ships links that 404.
+    try:
+        imgs = web_images.search(prompt, limit=6)
+    except Exception:
+        imgs = []
+    user_msg = (
+        f"Build {TEMPLATES[template]}.\nBuild spec (keypoints from intake analysis): {spec}\n"
+        f"Original user request: {prompt}\n"
+        f"Template: {template}.{ref_line}\nKeep it polished and responsive.")
+    if style_block:
+        user_msg += "\n\n" + style_block
+    urls = "\n".join(f"- {i.get('thumb')}" for i in imgs if i.get("thumb"))
+    if urls:
+        user_msg += "\n\nIMAGE URLS (use these, and only these, for imagery):\n" + urls
     messages = [
         {"role": "system", "content": _SYS},
-        {"role": "user", "content": (
-            f"Build {TEMPLATES[template]}.\nBuild spec (keypoints from intake analysis): {spec}\n"
-            f"Original user request: {prompt}\n"
-            f"Template: {template}.{ref_line}\nKeep it polished and responsive.")},
+        {"role": "user", "content": user_msg},
     ]
+
+    html = ""
     try:
         html = _clean(await _llm_html(messages, model, 6000))
     except HTTPException:
@@ -270,6 +331,11 @@ async def build_website(req: BuildRequest, db: Session = Depends(get_db)):
             pass
     if "<html" not in html.lower():
         raise HTTPException(status_code=502, detail="Model did not return HTML. Try again.")
+    # Missing </html> means the token budget ran out mid-document; the repair
+    # pass above already tried to fix it, so this is only a flag for the UI.
+    truncated = "</html>" not in html.lower()
+    if truncated:
+        _log.warning("build output truncated (%d chars)", len(html))
     name = re.sub(r"[^a-z0-9]+", "-", prompt.lower()).strip("-")[:40] or "site"
     job_id = uuid.uuid4().hex[:12]
     _JOBS[job_id] = {"name": name, "html": html, "ts": time.time()}
@@ -296,7 +362,11 @@ async def build_website(req: BuildRequest, db: Session = Depends(get_db)):
             db.rollback()
         except Exception:
             pass
-    return {"job_id": job_id, "name": name, "template": template, "html": html, "conversation_id": conv.id if "conv" in locals() else None}
+    return {"job_id": job_id, "name": name, "template": template, "html": html,
+            "style_ref": (ref_key if ref_key in REFERENCES
+                          else (ref or {}).get("name", "")),
+            "truncated": truncated,
+            "conversation_id": conv.id if "conv" in locals() else None}
 
 
 @router.get("/conversation/{conv_id}")
