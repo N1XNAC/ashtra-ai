@@ -47,13 +47,16 @@ def client_ip(req: Request) -> str:
     return req.client.host if req.client else "unknown"
 
 
-# Paths that never consume budget and never need a key (liveness only).
+# Paths that never consume budget and never need a key (liveness only,
+# plus market assets — <iframe> previews can't attach headers).
 OPEN_PATHS = {"/health", "/docs", "/redoc", "/openapi.json"}
+OPEN_PREFIXES = ("/market/file/",)
 
 
 class GlobalRateLimitMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
-        if request.url.path not in OPEN_PATHS:
+        if request.url.path not in OPEN_PATHS \
+                and not request.url.path.startswith(OPEN_PREFIXES):
             allowed, retry_after = _hit(
                 f"ip:{client_ip(request)}", settings.rate_limit_per_minute)
             if not allowed:
@@ -69,7 +72,8 @@ class ApiKeyMiddleware(BaseHTTPMiddleware):
     """Shared-secret gate. Inactive while API_KEY is empty (localhost dev)."""
 
     async def dispatch(self, request: Request, call_next):
-        if settings.api_key and request.url.path not in OPEN_PATHS:
+        if settings.api_key and request.url.path not in OPEN_PATHS \
+                and not request.url.path.startswith(OPEN_PREFIXES):
             # Constant-time compare to avoid timing leaks.
             import hmac
             got = request.headers.get("x-api-key", "")
@@ -85,7 +89,9 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
         resp = await call_next(request)
         resp.headers["X-Content-Type-Options"] = "nosniff"
-        resp.headers["X-Frame-Options"] = "DENY"
+        # market files are meant to be framed by the app (cross-origin iframes)
+        if not request.url.path.startswith("/market/file/"):
+            resp.headers["X-Frame-Options"] = "DENY"
         resp.headers["Referrer-Policy"] = "same-origin"
         resp.headers["Permissions-Policy"] = "camera=(), microphone=(), geolocation=()"
         return resp

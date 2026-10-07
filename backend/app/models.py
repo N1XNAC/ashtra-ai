@@ -39,6 +39,17 @@ class Message(Base):
 
     conversation = relationship("Conversation", back_populates="messages")
 
+class BuildSite(Base):
+    # built website html, keyed to its 🔨 history chat — lets Preview
+    # come back whenever the chat is reopened
+    __tablename__ = "build_sites"
+    id = Column(String, primary_key=True, default=uid)
+    conversation_id = Column(String, ForeignKey("conversations.id"), nullable=False, index=True)
+    job_id = Column(String, nullable=False)
+    html = Column(Text, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+
 class UserProfile(Base):
     # USER_MODEL_SPECIFICATION.txt — private per-user profile
     # Phase 3: explanation depth, tone, format, teaching style, expertise + signals

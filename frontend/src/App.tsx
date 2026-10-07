@@ -72,12 +72,14 @@ const PATHS: Record<string, ReactNode> = {
   books: (<><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20V4a2 2 0 0 0-2-2H6.5A2.5 2.5 0 0 0 4 4.5v15Z" /><path d="M4 19.5A2.5 2.5 0 0 0 6.5 22H20v-5" /><path d="M9 7h7" /></>),
   folder: (<><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7Z" /></>),
   clock: (<><circle cx="12" cy="12" r="9" /><path d="M12 7v5l3 2" /></>),
+  grid: (<><rect x="3" y="3" width="7" height="7" rx="1.5" /><rect x="14" y="3" width="7" height="7" rx="1.5" /><rect x="3" y="14" width="7" height="7" rx="1.5" /><rect x="14" y="14" width="7" height="7" rx="1.5" /></>),
   plugin: (<><path d="M9 7V3m6 4V3M7 7h10v5a5 5 0 0 1-10 0V7Z" /><path d="M12 17v4" /></>),
   terminal: (<><rect x="3" y="4" width="18" height="16" rx="2" /><path d="m7 9 3 3-3 3M12 15h5" /></>),
   external: (<><path d="M14 4h6v6M20 4 11 13" /><path d="M20 14v5a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2h5" /></>),
   dots: (<><circle cx="5" cy="12" r="1.4" /><circle cx="12" cy="12" r="1.4" /><circle cx="19" cy="12" r="1.4" /></>),
   brain: (<><circle cx="12" cy="12" r="8" /><path d="M12 4v16M8.5 9h7M8.5 15h7" /></>),
   bag: (<><path d="M6 8h12l1 12a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2L6 8Z" /><path d="M9 10V6a3 3 0 0 1 6 0v4" /></>),
+  gear: (<><circle cx="12" cy="12" r="3" /><path d="M19.4 15a1.7 1.7 0 0 0 .34 1.87l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.7 1.7 0 0 0-1.87-.34 1.7 1.7 0 0 0-1 1.55V21a2 2 0 1 1-4 0v-.09a1.7 1.7 0 0 0-1-1.55 1.7 1.7 0 0 0-1.87.34l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.7 1.7 0 0 0 .34-1.87 1.7 1.7 0 0 0-1.55-1H3a2 2 0 1 1 0-4h.09a1.7 1.7 0 0 0 1.55-1 1.7 1.7 0 0 0-.34-1.87l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.7 1.7 0 0 0 1.87.34h.09a1.7 1.7 0 0 0 1-1.55V3a2 2 0 1 1 4 0v.09a1.7 1.7 0 0 0 1 1.55h.09a1.7 1.7 0 0 0 1.87-.34l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.7 1.7 0 0 0-.34 1.87v.09a1.7 1.7 0 0 0 1.55 1H21a2 2 0 1 1 0 4h-.09a1.7 1.7 0 0 0-1.55 1Z" /></>),
 }
 function Icon({ name, size = 17 }: { name: keyof typeof PATHS; size?: number }) {
   return (
@@ -132,7 +134,7 @@ function renderMd(src: string) {
 }
 
 /* ---------- types ---------- */
-type View = 'chat' | 'library' | 'projects' | 'scheduled' | 'plugins' | 'build' | 'memory' | 'goals' | 'you'
+type View = 'chat' | 'library' | 'projects' | 'scheduled' | 'plugins' | 'build' | 'market' | 'memory' | 'goals' | 'you' | 'settings'
 type Msg = { role: string; content: string; meta?: string; fresh?: boolean; attachment?: string }
 type Conv = { id: string; title: string; created_at?: string }
 /* Per-chat session: drafts, attachments, messages and working state live here,
@@ -271,18 +273,53 @@ function ThreadShell({ msgs, busy, status, empty, composer, footer, actionIndex,
   )
 }
 
-function Chat({ convId, sessKey, sess, patchSess, onNewConv, refreshSidebar, onDraft }: {
+/* site-building intent detector for the Build & Run nudge popup */
+const BUILD_HINT_RE = /(^|\b)(build|create|make|design|code|develop|generate|ship)\b[\s\S]{0,45}\b(site|website|webpage|web\s?page|landing|portfolio|blog|store|shop|web\s?app)\b|\b(build|make|create)\s+(me\s+)?a\s+(site|website)\b/i
+
+function Chat({ convId, sessKey, sess, patchSess, onNewConv, refreshSidebar, onDraft, isBuild, goBuild }: {
   convId: string | null; sessKey: string; sess: Sess
   patchSess: (key: string, p: Partial<Sess>) => void
   onNewConv: (id: string) => void; refreshSidebar: () => void; onDraft: (title: string) => void
+  isBuild?: boolean; goBuild: (prompt: string) => void
 }) {
   const { msgs: cached, input, busy, busyLabel, err, attach } = sess
   const [morph, setMorph] = useState(false) /* gooey send-button stretch, one shot per send */
   const [deep, setDeep] = useState(() => {
     try { return localStorage.getItem('ashtra-deep') === 'on' } catch { return false }
   })
+  /* 🔨 build chats: always offer Preview — html is re-fetched from the server */
+  const [site, setSite] = useState<{ job_id: string; html: string } | null>(null)
+  const [siteOpen, setSiteOpen] = useState(false)
+  useEffect(() => {
+    setSite(null); setSiteOpen(false)
+    if (!isBuild || !convId) return
+    let cancelled = false
+    ;(async () => {
+      try {
+        const d = await api(`/build/conversation/${convId}`)
+        if (!cancelled && d?.html) setSite(d)
+      } catch { /* no build stored */ }
+    })()
+    return () => { cancelled = true }
+  }, [convId, isBuild])
+  async function downloadZip() {
+    if (!site) return
+    try {
+      const headers: Record<string, string> = {}
+      if (API_KEY) headers['X-API-Key'] = API_KEY
+      const r = await fetch(API + '/build/zip/' + site.job_id, { headers })
+      if (!r.ok) throw new Error(`HTTP ${r.status}`)
+      const url = URL.createObjectURL(await r.blob())
+      const a = document.createElement('a')
+      a.href = url; a.download = 'website.zip'; a.click()
+      setTimeout(() => URL.revokeObjectURL(url), 5000)
+    } catch { /* download failed */ }
+  }
   const [phase, setPhase] = useState(0) /* rotating status while busy */
   const PHASES = ['Thinking', 'Recalling memories', 'Drafting reply', 'Polishing']
+  /* site-building intent → gentle nudge to Build & Run (once per send attempt) */
+  const [buildHint, setBuildHint] = useState(false)
+  const hintDone = useRef(false)
   const taRef = useRef<HTMLTextAreaElement>(null)
   const fileRef = useRef<HTMLInputElement>(null)
 
@@ -344,6 +381,7 @@ function Chat({ convId, sessKey, sess, patchSess, onNewConv, refreshSidebar, onD
     if ((!content && !img) || sess.busy || sess.msgs === null) return
     if (!content && img) content = 'What do you see in this image?'
     if (content.length > MAXLEN) { patchSess(key, { err: `Message too long (max ${MAXLEN} chars).` }); return }
+    if (!img && !isBuild && !hintDone.current && BUILD_HINT_RE.test(content)) { setBuildHint(true); return }
     if (img) URL.revokeObjectURL(img.url)
     const userMsg: Msg = { role: 'user', content, fresh: true, attachment: img ? img.file.name : undefined }
     patchSess(key, { msgs: [...base, userMsg], input: '', err: '', attach: null, busy: true, busyLabel: '' })
@@ -420,10 +458,25 @@ function Chat({ convId, sessKey, sess, patchSess, onNewConv, refreshSidebar, onD
       </div>
     </div>
   )
+  const buildIdx = (site && cached)
+    ? cached.map((m, i) => m.role === 'assistant' ? i : -1).filter(i => i >= 0).pop() ?? null
+    : null
   return (
     <ThreadShell msgs={cached} busy={busy} status={busyLabel || `${PHASES[phase]}…`} empty={welcome}
+      actionIndex={site ? buildIdx : null}
+      action={site ? <button className="mini" onClick={() => setSiteOpen(true)}>Preview</button> : null}
       composer={<ComposerShell
         head={<>
+          {buildHint && (
+            <div className="buildhint" role="dialog" aria-label="Use Build and Run">
+              <div className="bh-t">Building a website?</div>
+              <div className="bh-b">Coding sites is what <b>Build &amp; Run</b> is for — it builds, previews and hands you the zip.</div>
+              <div className="bh-a">
+                <button className="mini" onClick={() => { setBuildHint(false); hintDone.current = true; send() }}>Skip</button>
+                <button className="mini primary" onClick={() => { setBuildHint(false); hintDone.current = true; goBuild(input.trim()) }}>Go to Build &amp; Run</button>
+              </div>
+            </div>
+          )}
           {err ? <div className="errbar"><div>{err}</div></div> : (attach ? (
           <div className="attachrow">
             <img src={attach.url} className="thumb" alt="" />
@@ -458,19 +511,44 @@ function Chat({ convId, sessKey, sess, patchSess, onNewConv, refreshSidebar, onD
         canSend={!(busy || cached === null || (!input.trim() && !attach))}
         onSend={() => send()} sendLabel="Send" />
       }
-      footer={<div className="hint">Ashtra can make mistakes. Memories are transparent and exportable.</div>} />
+      footer={<>
+        {siteOpen && site && <SiteModal html={site.html} onClose={() => setSiteOpen(false)} onDownload={downloadZip} />}
+        <div className="hint">Ashtra can make mistakes. Memories are transparent and exportable.</div>
+      </>} />
   )
 }
 
 /* ---------- sidebar ---------- */
-function Sidebar({ view, setView, convId, setConvId, convs, onNew, onDelete, open, close, onStore }: {
+function Sidebar({ view, setView, convId, setConvId, convs, onNew, onDelete, onDeleteMany, open, close, onStore, name, onBuild }: {
   view: View; setView: (v: View) => void
   convId: string | null; setConvId: (id: string | null) => void
   convs: Conv[]; onNew: () => void; onDelete: (id: string) => void
+  onDeleteMany: (ids: string[]) => void
   open: boolean; close: () => void; onStore: () => void
+  name: string; onBuild: () => void
 }) {
   const [moreOpen, setMoreOpen] = useState(false)
   const [q, setQ] = useState('')
+  /* long-press (or right-click) a chat → multi-select delete mode */
+  const [selMode, setSelMode] = useState(false)
+  const [sel, setSel] = useState<Set<string>>(() => new Set())
+  const pressTimer = useRef<number | null>(null)
+  const startPress = (id: string) => {
+    if (selMode) return
+    pressTimer.current = window.setTimeout(() => {
+      setSelMode(true); setSel(new Set([id]))
+      if (navigator.vibrate) navigator.vibrate(12)
+    }, 550)
+  }
+  const cancelPress = () => {
+    if (pressTimer.current !== null) { clearTimeout(pressTimer.current); pressTimer.current = null }
+  }
+  const toggleSel = (id: string) => setSel(s => {
+    const n = new Set(s)
+    if (n.has(id)) n.delete(id); else n.add(id)
+    if (n.size === 0) setSelMode(false)
+    return n
+  })
   const go = (v: View) => { setView(v); close() }
   const row = (label: string, icon: keyof typeof PATHS, active: boolean, onClick: () => void) => (
     <button key={label} className={`mrow${active ? ' on' : ''}`} onClick={onClick}>
@@ -491,33 +569,55 @@ function Sidebar({ view, setView, convId, setConvId, convs, onNew, onDelete, ope
         </div>
         <nav className="mnav">
           {row('New chat', 'pen', view === 'chat', () => { onNew(); close() })}
-          {row('Build & Run', 'terminal', view === 'build', () => go('build'))}
+          {row('Build & Run', 'terminal', view === 'build', onBuild)}
+          {row('Web market', 'grid', view === 'market', () => go('market'))}
           {row('Scheduled', 'clock', view === 'scheduled', () => go('scheduled'))}
-          {row('More', 'dots', false, () => setMoreOpen(v => !v))}
           {moreOpen && (<>
             {row('Memory', 'memory', view === 'memory', () => go('memory'))}
             {row('Goals', 'target', view === 'goals', () => go('goals'))}
             {row('You', 'user', view === 'you', () => go('you'))}
+            {row('Settings', 'gear', view === 'settings', () => go('settings'))}
           </>)}
+          {row('More', 'dots', false, () => setMoreOpen(v => !v))}
         </nav>
         <div className="drawer-search"><Icon name="search" size={16} />
           <input value={q} onChange={e => setQ(e.target.value)} placeholder="Search" aria-label="Search chats" />
         </div>
         <div className="sect">Recent chats</div>
+        {selMode && (
+          <div className="selbar">
+            <span className="selcount">{sel.size} selected</span>
+            <button className="mini" onClick={() => { setSelMode(false); setSel(new Set()) }}>Cancel</button>
+            <button className="mini danger-solid" disabled={!sel.size}
+              onClick={() => { const ids = [...sel]; setSelMode(false); setSel(new Set()); onDeleteMany(ids) }}>
+              Delete{sel.size ? ` (${sel.size})` : ''}
+            </button>
+          </div>
+        )}
         <div className="convlist">
           {rows.map(c => (
-            <button key={c.id} className={`conv${convId === c.id && view === 'chat' ? ' on' : ''}${c.title.startsWith('🔨') ? ' buildmark' : ''}`}
-              onClick={() => { setConvId(c.id); setView('chat'); close() }}>
+            <button key={c.id}
+              className={`conv${convId === c.id && view === 'chat' && !selMode ? ' on' : ''}${c.title.startsWith('🔨') ? ' buildmark' : ''}${selMode ? ' selmode' : ''}${sel.has(c.id) ? ' sel' : ''}`}
+              onPointerDown={() => startPress(c.id)}
+              onPointerUp={cancelPress} onPointerLeave={cancelPress} onPointerCancel={cancelPress}
+              onContextMenu={e => { e.preventDefault(); cancelPress(); if (!selMode) { setSelMode(true); setSel(new Set([c.id])) } }}
+              onClick={() => {
+                if (selMode) { toggleSel(c.id); return }
+                setConvId(c.id); setView('chat'); close()
+              }}>
+              {selMode && <span className="tick" aria-hidden="true">{sel.has(c.id) ? '✓' : ''}</span>}
               <span className="t">{c.title || 'New conversation'}</span>
-              <span className="del" onClick={e => { e.stopPropagation(); onDelete(c.id) }}><Icon name="trash" size={15} /></span>
+              {!selMode && <span className="del" onClick={e => { e.stopPropagation(); onDelete(c.id) }}><Icon name="trash" size={15} /></span>}
             </button>
           ))}
           {rows.length === 0 && <div className="sect">No chats yet</div>}
         </div>
-        <div className="drawer-profile">
-          <div className="dp-ava">M</div>
-          <div className="dp-meta"><div className="dp-name">Master</div></div>
-          <button className="iconbtn" aria-label="Store" onClick={onStore}><Icon name="bag" size={19} /></button>
+        <div className="drawer-profile" role="button" tabIndex={0}
+          onClick={() => go('you')}
+          onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') go('you') }}>
+          <div className="dp-ava">{(name || 'M').slice(0, 1).toUpperCase()}</div>
+          <div className="dp-meta"><div className="dp-name">{name || 'Master'}</div></div>
+          <button className="iconbtn" aria-label="Store" onClick={e => { e.stopPropagation(); onStore() }}><Icon name="bag" size={19} /></button>
         </div>
       </div>
     </>
@@ -612,7 +712,71 @@ function PluginsPanel() {
 }
 
 /* ---------- build & run (AI website builder) ---------- */
-function BuildPanel() {
+/* ---------- dark browser preview modal (shared by Build & Run + 🔨 chats).
+   Traffic lights are real: red = close, yellow = minimize, green = fullscreen
+   (click again to exit). External links open in a new tab instead of turning
+   the frame black (X-Frame-Options). ---------- */
+function SiteModal({ html, onClose, onDownload }: {
+  html: string; onClose: () => void; onDownload?: () => void
+}) {
+  const boxRef = useRef<HTMLDivElement>(null)
+  const frameRef = useRef<HTMLIFrameElement>(null)
+  const [full, setFull] = useState(false)
+  const [min, setMin] = useState(false)
+  useEffect(() => {
+    const h = () => setFull(!!document.fullscreenElement)
+    document.addEventListener('fullscreenchange', h)
+    return () => document.removeEventListener('fullscreenchange', h)
+  }, [])
+  /* route in-frame link clicks to a new tab (frame navigation → black screen) */
+  useEffect(() => {
+    const f = frameRef.current
+    if (!f) return
+    const route = () => {
+      try {
+        f.contentDocument?.addEventListener('click', (e: MouseEvent) => {
+          const a = (e.target as HTMLElement | null)?.closest?.('a')
+          const href = a?.getAttribute('href') || ''
+          if (/^https?:/i.test(href)) {
+            e.preventDefault()
+            window.open(href, '_blank', 'noopener')
+          }
+        })
+      } catch { /* sandboxed — prompt asks for target="_blank" */ }
+    }
+    f.addEventListener('load', route)
+    return () => { f.removeEventListener('load', route) }
+  }, [html])
+  const toggleFull = () => {
+    if (document.fullscreenElement) document.exitFullscreen().catch(() => {})
+    else boxRef.current?.requestFullscreen().catch(() => {})
+  }
+  const toggleMin = () => {
+    if (full) document.exitFullscreen().catch(() => {})
+    setMin(m => !m)
+  }
+  return (
+    <div className="bmodal-scrim" onClick={onClose}>
+      <div className={`bmodal${min ? ' min' : ''}`} ref={boxRef} onClick={e => e.stopPropagation()}>
+        <div className="b-top">
+          <div className="b-circles">
+            <button className="b-c b-ctl" aria-label="Close preview" title="Close" onClick={onClose} />
+            <button className="b-c b-ctl" aria-label={min ? 'Restore preview' : 'Minimize preview'} title={min ? 'Restore' : 'Minimize'} onClick={toggleMin} />
+            <button className={`b-c b-ctl${full ? ' on' : ''}`} aria-label={full ? 'Exit fullscreen' : 'Fullscreen preview'} title={full ? 'Exit fullscreen' : 'Fullscreen'} onClick={toggleFull} />
+          </div>
+          <div className="b-url">{min ? 'preview — minimized' : 'preview'}</div>
+          <button className="iconbtn" aria-label="Close preview" onClick={onClose}><Icon name="x" size={16} /></button>
+        </div>
+        <iframe ref={frameRef} title="preview" className="b-body" srcDoc={html}
+          sandbox="allow-scripts allow-same-origin allow-popups allow-popups-to-escape-sandbox" />
+        {min && <button className="b-restore" onClick={() => setMin(false)}>Restore preview</button>}
+        {!min && onDownload && <div className="b-foot"><button className="mini" onClick={onDownload}>Download zip</button></div>}
+      </div>
+    </div>
+  )
+}
+
+function BuildPanel({ seed, onConsumed }: { seed?: string; onConsumed?: () => void }) {
   const [prompt, setPrompt] = useState('')
   const [log, setLog] = useState<string[]>(() => {
     try {
@@ -627,6 +791,16 @@ function BuildPanel() {
   const [jobId, setJobId] = useState(() => {
     try { return JSON.parse(localStorage.getItem('ashtra-build-v1') || '{}').jobId || '' } catch { return '' }
   })
+  /* arriving from the chat nudge: fresh build chat with the request typed in */
+  const seeded = useRef(false)
+  useEffect(() => {
+    if (!seed || seeded.current) return
+    seeded.current = true
+    setLog(['Describe the website to create — I’ll code it, then you can preview and download the zip.'])
+    setHtml(''); setJobId(''); setPrompt(seed)
+    onConsumed?.()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
   useEffect(() => {
     try { localStorage.setItem('ashtra-build-v1', JSON.stringify({ log: log.slice(-50), html, jobId })) } catch { /* quota */ }
   }, [log, html, jobId])
@@ -642,10 +816,14 @@ function BuildPanel() {
     const t1 = setTimeout(() => push('> polishing…'), 10000)
     const t2 = setTimeout(() => push('> final touches…'), 22000)
     try {
-      const j = await api('/build/website', { method: 'POST', body: JSON.stringify({ user_id: USER, prompt: p }) }, 150000) as { job_id: string; name: string; template: string; html: string }
-      setHtml(j.html); setJobId(j.job_id)
-      push(`> template: ${j.template}`)
-      push(`> done: ${j.name} (${(j.html.length / 1024).toFixed(1)} KB) — preview or download below.`)
+      const j = await api('/build/website', { method: 'POST', body: JSON.stringify({ user_id: USER, prompt: p }) }, 200000) as { status?: string; reply?: string; job_id: string; name: string; template: string; html: string }
+      if (j.status === 'chat' || !j.job_id) {
+        push(j.reply || 'Tell me what website you want built.')
+      } else {
+        setHtml(j.html); setJobId(j.job_id)
+        push(`> template: ${j.template}`)
+        push(`> done: ${j.name} (${(j.html.length / 1024).toFixed(1)} KB) — preview or download below.`)
+      }
     } catch (e) {
       push(`> error: ${e instanceof Error ? e.message : 'build failed'}`)
     }
@@ -691,19 +869,7 @@ function BuildPanel() {
           onSend={run} sendLabel="Build" />
       }
       footer={<>
-        {siteOpen && html && (
-          <div className="bmodal-scrim" onClick={() => setSiteOpen(false)}>
-            <div className="bmodal" onClick={e => e.stopPropagation()}>
-              <div className="b-top">
-                <div className="b-circles"><span className="b-c" /><span className="b-c" /><span className="b-c" /></div>
-                <div className="b-url">preview</div>
-                <button className="iconbtn" aria-label="Close preview" onClick={() => setSiteOpen(false)}><Icon name="x" size={16} /></button>
-              </div>
-              <iframe title="preview" className="b-body" srcDoc={html} sandbox="" />
-              <div className="b-foot"><button className="mini" onClick={download}>Download zip</button></div>
-            </div>
-          </div>
-        )}
+        {siteOpen && html && <SiteModal html={html} onClose={() => setSiteOpen(false)} onDownload={download} />}
       </>} />
   )
 }
@@ -821,21 +987,158 @@ function Seg({ options, value, onPick }: { options: string[]; value: string; onP
     </div>
   )
 }
-function YouPanel() {
+/* Uiverse metal slider (Stavros2410) — discrete steps for You preferences */
+function UiSlider({ options, value, onPick, grad }: {
+  options: string[]; value: string; onPick: (v: string) => void; grad: 1 | 2 | 3
+}) {
+  const idx = Math.max(0, options.indexOf(value))
+  /* optimistic local position — slides instantly, syncs from props when they change */
+  const [pos, setPos] = useState(idx)
+  useEffect(() => { setPos(idx) }, [idx])
+  return (
+    <div className="ys-row">
+      <div className="ys-val">{options[pos] ?? value}</div>
+      <div className="ys-wrap">
+        <input className={`ys-slider g${grad}`} type="range" min={0} max={options.length - 1} step={1}
+          value={pos} aria-label={options[pos] ?? value}
+          onChange={e => {
+            const n = Number(e.target.value)
+            setPos(n)
+            onPick(options[n] ?? value)
+          }} />
+      </div>
+    </div>
+  )
+}
+
+/* ---------- web market: template showcase with live AI editing ---------- */
+type MarketItem = { id: string; name: string; description: string }
+
+/* templates ship as fixed-viewport designs (overflow:hidden) — when their
+   content doesn't fit the window it clips with no scrollbar. This runs inside
+   the preview and unlocks only the containers that actually overflow. */
+const MK_SCROLL_FIX = `<script>(function(){function u(){try{document.querySelectorAll('*').forEach(function(el){var cs=getComputedStyle(el);if((cs.overflowY==='hidden'||cs.overflow==='hidden')&&el.scrollHeight>el.clientHeight+16){el.style.setProperty('overflow-y','auto','important');el.style.setProperty('overflow','auto','important');}})}catch(e){}}u();addEventListener('load',u);setTimeout(u,1200);setTimeout(u,4000);setTimeout(u,9000);})();</script>`
+function mkScrollable(h: string): string {
+  if (h.includes('mk-scroll-fix')) return h
+  if (/<\/head>/i.test(h)) return h.replace(/<\/head>/i, MK_SCROLL_FIX + '</head>')
+  return MK_SCROLL_FIX + h
+}
+
+/* srcDoc iframes resolve relative URLs against the app origin — pin them to the
+   template's own directory so built Vite assets (t3/t9) load */
+function mkBase(h: string, tid: string): string {
+  const base = `<base href="${API}/market/file/${tid}/">`
+  if (/<base\s/i.test(h)) return h
+  if (/<head[^>]*>/i.test(h)) return h.replace(/<head[^>]*>/i, m => m + base)
+  return base + h
+}
+
+function MarketFull({ item, onClose }: { item: MarketItem; onClose: () => void }) {
+  const [html, setHtml] = useState('')
+  const [loaded, setLoaded] = useState(false)
+  const [instruction, setInstruction] = useState('')
+  const [note, setNote] = useState('')
+  const [wip, setWip] = useState(false)
+  useEffect(() => {
+    let dead = false
+    ;(async () => {
+      try {
+        const headers: Record<string, string> = {}
+        if (API_KEY) headers['X-API-Key'] = API_KEY
+        const r = await fetch(`${API}/market/file/${item.id}/index.html`, { headers })
+        if (!r.ok) throw new Error(`HTTP ${r.status}`)
+        const t = await r.text()
+        if (!dead) setHtml(mkScrollable(mkBase(t, item.id)))
+      } catch (e) {
+        if (!dead) setNote(e instanceof Error ? e.message : 'Could not load template.')
+      }
+      if (!dead) setLoaded(true)
+    })()
+    return () => { dead = true }
+  }, [item.id])
+  useEffect(() => {
+    const esc = (e: KeyboardEvent) => { if (e.key === 'Escape') { if (wip) setWip(false); else onClose() } }
+    window.addEventListener('keydown', esc)
+    return () => window.removeEventListener('keydown', esc)
+  }, [wip, onClose])
+  function apply() {
+    if (!instruction.trim() || !loaded) return
+    setWip(true); setInstruction('')
+  }
+  return (
+    <div className="mfull">
+      {loaded && html
+        ? <iframe className="mfull-frame" title={item.name} srcDoc={html}
+            sandbox="allow-scripts allow-popups allow-popups-to-escape-sandbox" />
+        : <div className="mfull-load">{note ? `Load failed: ${note}` : `Loading ${item.name}…`}</div>}
+      <button className="mclose" aria-label="Close preview" onClick={onClose}><Icon name="x" size={22} /></button>
+      <div className="mchat">
+        <input value={instruction} maxLength={400} disabled={!loaded}
+          onChange={e => setInstruction(e.target.value)}
+          onKeyDown={e => { if (e.key === 'Enter') apply() }}
+          placeholder={`Message about ${item.name}…`} />
+        <button className="mchat-send" onClick={apply} disabled={!instruction.trim() || !loaded}
+          aria-label="Send"><Icon name="up" size={16} /></button>
+      </div>
+      {note && loaded && <div className="mnote">{note}</div>}
+      {wip && (
+        <div className="mwip-scrim" onClick={() => setWip(false)}>
+          <div className="mwip" role="dialog" aria-modal="true" onClick={e => e.stopPropagation()}>
+            <div className="mwip-ic">🛠</div>
+            <div className="mwip-t">Coming in future updates</div>
+            <div className="mwip-b">Live chat editing for Web Market sites is still under work by the NACX team and will be available in future updates. Stay tuned!</div>
+            <button className="mwip-ok" onClick={() => setWip(false)}>Got it</button>
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
+function MarketPanel() {
+  const [items, setItems] = useState<MarketItem[]>([])
+  const [open, setOpen] = useState<MarketItem | null>(null)
+  useEffect(() => {
+    let dead = false
+    api('/market/list').then((d: MarketItem[]) => { if (!dead && Array.isArray(d)) setItems(d) })
+      .catch(() => { /* offline */ })
+    return () => { dead = true }
+  }, [])
+  return (
+    <div className="panel"><div className="panel-inner">
+      <h2>Web market</h2>
+      <p className="desc">Pick a template — preview it full-screen, then live-edit it with AI.</p>
+      <div className="mk-grid">
+        {items.map(it => (
+          <button key={it.id} className="mk-card" onClick={() => setOpen(it)}>
+            <div className="mk-thumb">
+              <iframe title={it.name} src={`${API}/market/file/${it.id}/index.html`}
+                loading="lazy" tabIndex={-1} sandbox="allow-scripts allow-popups" />
+            </div>
+            <div className="mk-meta">
+              <div className="mk-name">{it.name}</div>
+              <div className="mk-desc">{it.description}</div>
+            </div>
+          </button>
+        ))}
+        {items.length === 0 && <div className="card">No templates found — is the templates folder reachable?</div>}
+      </div>
+      {open && <MarketFull item={open} onClose={() => setOpen(null)} />}
+    </div></div>
+  )
+}
+
+function YouPanel({ name, onName }: { name: string; onName: (v: string) => void }) {
   const [model, setModel] = useState<{
     traits: Record<string, string>; adaptation: Record<string, string | number>;
     directives: string; recent_behaviour_patterns: string[]
   } | null>(null)
-  const [digest, setDigest] = useState('')
-  const [local, setLocal] = useState<{ trained?: boolean; val_perplexity?: number; train_windows?: number }>({})
   async function load() {
     try { setModel(await api(`/profile/${USER}/model`)) } catch { /* offline */ }
-    try { setDigest((await api(`/learn/digest?user_id=${USER}`)).digest ?? '') } catch { /* offline */ }
-    try { setLocal(await api('/model/status')) } catch { /* offline */ }
   }
   useEffect(() => { load() }, [])
   async function patch(field: string, value: string) {
-    await api(`/profile/${USER}`, { method: 'PATCH', body: JSON.stringify({ [field]: value }) })
+    try { await api(`/profile/${USER}`, { method: 'PATCH', body: JSON.stringify({ [field]: value }) }) } catch { /* offline */ }
     load()
   }
   const t = model?.traits ?? {}
@@ -843,36 +1146,55 @@ function YouPanel() {
     <div className="panel"><div className="panel-inner">
       <h2>You</h2>
       <p className="desc">How Ashtra adapts to you. Confidence {String(model?.adaptation.confidence ?? '…')}.</p>
-      <div className="card">
-        <div className="chips">
-          {[t.explanation_depth, t.teaching_style, t.expertise_level, t.communication_format, t.tone]
-            .filter(Boolean).map((c, i) => <span key={i} className="chip">{c}</span>)}
-        </div>
-        <div className="lab">{model?.directives}</div>
-      </div>
+      <div className="lab">What should we call you?</div>
+      <input className="namepill" value={name} maxLength={32} placeholder="Type a name…"
+        onChange={e => { onName(e.target.value); try { localStorage.setItem('ashtra-name', e.target.value) } catch { /* quota */ } }} />
       <div className="lab">Depth</div>
-      <Seg options={['concise', 'balanced', 'detailed']} value={t.explanation_depth ?? 'balanced'}
-        onPick={v => patch('explanation_depth', v)} />
+      <UiSlider options={['concise', 'balanced', 'detailed']} value={t.explanation_depth ?? 'balanced'}
+        onPick={v => patch('explanation_depth', v)} grad={1} />
       <div className="lab">Tone</div>
-      <Seg options={['casual', 'formal']} value={t.tone ?? 'casual'} onPick={v => patch('tone', v)} />
+      <UiSlider options={['casual', 'formal']} value={t.tone ?? 'casual'}
+        onPick={v => patch('tone', v)} grad={2} />
       <div className="lab">Format</div>
-      <Seg options={['chat', 'bullets', 'tutorial', 'code-first']} value={t.communication_format ?? 'chat'}
-        onPick={v => patch('communication_format', v)} />
-      <div className="lab">Learning digest</div>
-      <div className="card">{digest || 'No digest yet, master.'}
-        <div className="toolbar">
-          <button className="mini" onClick={async () => { await post(`/learn/consolidate?user_id=${USER}&days=30`, {}); load() }}>
-            Consolidate now</button>
-        </div>
+      <UiSlider options={['chat', 'bullets', 'tutorial', 'code-first']} value={t.communication_format ?? 'chat'}
+        onPick={v => patch('communication_format', v)} grad={3} />
+    </div></div>
+  )
+}
+
+/* ---------- settings ---------- */
+function SettingsPanel({ fx, setFx }: { fx: boolean; setFx: (v: boolean) => void }) {
+  const [confirm, setConfirm] = useState(false)
+  return (
+    <div className="panel"><div className="panel-inner">
+      <h2>Settings</h2>
+      <div className="lab">Appearance</div>
+      <div className="card setrow">
+        <span>Animations &amp; effects</span>
+        <button className={`toggle${fx ? ' on' : ''}`} role="switch" aria-checked={fx}
+          onClick={() => { const v = !fx; setFx(v); try { localStorage.setItem('ashtra-fx', v ? 'on' : 'off') } catch { /* quota */ } }}>
+          <i />
+        </button>
       </div>
-      <div className="lab">Local model</div>
-      <div className="card">
-        {local.trained ? `Trained · ppl ${Number(local.val_perplexity).toFixed(2)} · ${local.train_windows} windows` : 'Not trained yet'}
-        <div className="toolbar">
-          <button className="mini" onClick={async () => { await post('/model/fine-tune', { steps: 50 }); load() }}>
-            Fine-tune on latest chats</button>
-        </div>
+      <div className="lab">Local data</div>
+      <div className="card setrow">
+        <span>Clear saved chats &amp; drafts on this device</span>
+        <button className="mini danger-solid" onClick={() => setConfirm(true)}>Clear</button>
       </div>
+      <div className="lab">About</div>
+      <div className="card">Ashtra AI · local session. Backend {API.replace(/^https?:\/\//, '')}</div>
+      {confirm && (
+        <ConfirmDialog title="Clear local data?" body="Saved chats and build drafts stored on this device will be removed."
+          confirmLabel="Clear" onCancel={() => setConfirm(false)}
+          onConfirm={() => {
+            setConfirm(false)
+            try {
+              localStorage.removeItem('ashtra-sessions-v1')
+              localStorage.removeItem('ashtra-build-v1')
+            } catch { /* quota */ }
+            location.reload()
+          }} />
+      )}
     </div></div>
   )
 }
@@ -882,9 +1204,14 @@ export default function App() {
   const [view, setView] = useState<View>('chat')
   const [convId, setConvId] = useState<string | null>(null)
   const [convs, setConvs] = useState<Conv[]>([])
-  const [sideOpen, setSideOpen] = useState(false)
+  const [sideOpen, setSideOpen] = useState(() => window.innerWidth > 760)
   const [confirmDel, setConfirmDel] = useState<string | null>(null)
   const [storePop, setStorePop] = useState(false)
+  const [userName, setUserName] = useState(() => {
+    try { return localStorage.getItem('ashtra-name') || 'Master' } catch { return 'Master' }
+  })
+  /* fresh Build & Run chat seeded from the chat nudge (bump key → remount) */
+  const [buildSeed, setBuildSeed] = useState<{ k: number; p: string }>({ k: 0, p: '' })
   /* session store: one entry per chat, survives switching + page reloads */
   const [sessions, setSessions] = useState<Record<string, Sess>>(() => {
     try {
@@ -923,7 +1250,7 @@ export default function App() {
       return n
     })
   }
-  const [fx] = useState(() => {
+  const [fx, setFx] = useState(() => {
     try { return localStorage.getItem('ashtra-fx') !== 'off' } catch { return true }
   })
 
@@ -941,6 +1268,15 @@ export default function App() {
     await api(`/chat/conversations/${USER}/${id}`, { method: 'DELETE' })
     dropSess(id)
     if (convId === id) setConvId(null)
+    refreshConvs()
+  }
+  /* bulk delete from multi-select mode */
+  async function delConvs(ids: string[]) {
+    for (const id of ids) {
+      try { await api(`/chat/conversations/${USER}/${id}`, { method: 'DELETE' }) } catch { /* keep going */ }
+      dropSess(id)
+    }
+    if (convId && ids.includes(convId)) setConvId(null)
     refreshConvs()
   }
 
@@ -962,28 +1298,39 @@ export default function App() {
     setConvId(id)
   }
 
-  const titles: Record<View, string> = { chat: 'Ashtra', library: 'Library', projects: 'Projects', scheduled: 'Scheduled', plugins: 'Plugins', build: 'Build & Run', memory: 'Memory', goals: 'Goals', you: 'You' }
+  const titles: Record<View, string> = { chat: 'Ashtra', library: 'Library', projects: 'Projects', scheduled: 'Scheduled', plugins: 'Plugins', build: 'Build & Run', market: 'Web market', memory: 'Memory', goals: 'Goals', you: 'You', settings: 'Settings' }
+  /* Build & Run always opens a brand-new build chat (like New chat) */
+  function startFreshBuild() {
+    try { localStorage.removeItem('ashtra-build-v1') } catch { /* quota */ }
+    setBuildSeed(s => ({ k: s.k + 1, p: '' }))
+    setView('build'); setSideOpen(false)
+  }
 
   return (
     <div className={fx ? 'ash' : 'ash no-fx'}>
       <Sidebar view={view} setView={setView} convId={convId} setConvId={setConvId}
-        convs={convs} onNew={() => { if (sessions['new']?.busy) return; setConvId(null); setView('chat') }} onDelete={(id) => setConfirmDel(id)}
-        open={sideOpen} close={() => setSideOpen(false)} onStore={() => setStorePop(true)} />
+        convs={convs} onNew={() => { if (sessions['new']?.busy) return; setConvId(null); setView('chat') }}
+        onDelete={(id) => setConfirmDel(id)} onDeleteMany={delConvs}
+        open={sideOpen} close={() => setSideOpen(false)} onStore={() => setStorePop(true)}
+        name={userName} onBuild={startFreshBuild} />
       <div className="main">
         <div className="topbar">
-          <button className="burger" onClick={() => setSideOpen(true)} aria-label="Open sidebar"><Icon name="menu" size={22} /></button>
+          {!sideOpen && <button className="burger" onClick={() => setSideOpen(true)} aria-label="Open sidebar"><Icon name="menu" size={22} /></button>}
           <div>
             <div className="name">{titles[view]}</div>
             {view === 'chat' && <div className="sub"><span className="dot" /> remembers you</div>}
           </div>
         </div>
         {view === 'chat' && <Chat key={sessKey} convId={convId} sessKey={sessKey} sess={sess}
-          patchSess={patchSess} onNewConv={onNewConv} refreshSidebar={refreshConvs} onDraft={addDraftConv} />}
+          patchSess={patchSess} onNewConv={onNewConv} refreshSidebar={refreshConvs} onDraft={addDraftConv}
+          isBuild={convs.find(c => c.id === convId)?.title.startsWith('🔨') ?? false}
+          goBuild={p => { setBuildSeed({ k: Date.now(), p }); setView('build') }} />}
         {view === 'library' && <LibraryPanel convs={convs} convId={convId} setConvId={setConvId} setView={setView} onDelete={(id) => setConfirmDel(id)} refresh={refreshConvs} />}
         {view === 'projects' && <SoonPanel title="Projects" body="Project workspaces are coming soon." />}
         {view === 'scheduled' && <ScheduledPanel />}
         {view === 'plugins' && <PluginsPanel />}
-        {view === 'build' && <BuildPanel />}
+        {view === 'build' && <BuildPanel key={buildSeed.k} seed={buildSeed.p}
+          onConsumed={() => setBuildSeed(s => ({ ...s, p: '' }))} />}
         {view === 'chat' && busyOthers.length > 0 && (
           <button className="workpill" onClick={() => {
             const k = busyOthers[0][0]
@@ -996,7 +1343,9 @@ export default function App() {
         )}
         {view === 'memory' && <MemoryPanel />}
         {view === 'goals' && <GoalsPanel />}
-        {view === 'you' && <YouPanel />}
+        {view === 'you' && <YouPanel name={userName} onName={setUserName} />}
+        {view === 'settings' && <SettingsPanel fx={fx} setFx={setFx} />}
+        {view === 'market' && <MarketPanel />}
       </div>
       {confirmDel && (
         <ConfirmDialog title="Delete this chat?" body="The conversation and its messages will be removed."
