@@ -1,0 +1,312 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Intelligence Designed To Evolve</title>
+    <meta
+      name="description"
+      content="Intelligence Designed To Evolve - Modular AI platform designed for production."
+    />
+    <meta property="og:title" content="Intelligence Designed To Evolve" />
+    <meta
+      property="og:description"
+      content="Intelligence Designed To Evolve - Modular AI platform designed for production."
+    />
+    <meta property="og:type" content="website" />
+    <meta name="twitter:card" content="summary_large_image" />
+
+    <!-- Google Fonts: Inter -->
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap"
+      rel="stylesheet"
+    />
+
+    <!-- OnlineWebFonts: BubbledotICG-FinePos (exact retro dot-matrix) -->
+    <link
+      href="https://db.onlinewebfonts.com/c/8cb707a9b8a73f8a7403336b861c3074?family=BubbledotICG-FinePos"
+      rel="stylesheet"
+    />
+
+    <!-- Font Awesome 6.5.2 (enterprise brand icons) -->
+    <link
+      rel="stylesheet"
+      href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.2/css/all.min.css"
+      integrity="sha512-SnH5WK+bZxgPHs44uWIX+LLJAJ9/2PkPKZ5QiAj6Ta86w+fsb2TkcmfRyVX3pBnMFcV7oQPJkl9QevSCWr3W6A=="
+      crossorigin="anonymous"
+      referrerpolicy="no-referrer"
+    />
+
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <!-- Full-bleed background video -->
+    <div class="bg" aria-hidden="true">
+      <video class="bg-video" autoplay muted loop playsinline>
+        <source
+          src="https://d8j0ntlcm91z4.cloudfront.net/user_38xzZboKViGWJOttwIXH07lWA1P/hf_20260809_012548_ef22562c-c0ae-4816-ad9d-f8922af4e6a7.mp4"
+          type="video/mp4"
+        />
+      </video>
+    </div>
+
+    <!-- Main Viewport Layout -->
+    <div class="page">
+      <!-- 1. Header (desktop + mobile burger) -->
+      <header class="site-header">
+        <a href="#home" class="logo-btn" aria-label="Intelligence Home">
+          <img src="assets/logo.webp" alt="" width="52" height="52" class="logo-img" />
+        </a>
+
+        <nav class="nav-pill desktop-nav" aria-label="Primary navigation">
+          <a href="#home" class="nav-link active">Home</a>
+          <a href="#product" class="nav-link">Product</a>
+          <a href="#case-studies" class="nav-link">Case Studies</a>
+          <a href="#contact" class="nav-link">Contact</a>
+        </nav>
+
+        <a href="#signin" class="btn-signin desktop-signin">Sign In</a>
+
+        <button
+          type="button"
+          class="burger-btn mobile-only"
+          aria-label="Toggle navigation menu"
+          aria-expanded="false"
+          aria-controls="mobile-menu"
+        >
+          <span class="burger-bar"></span>
+          <span class="burger-bar"></span>
+          <span class="burger-bar"></span>
+        </button>
+      </header>
+
+      <!-- Mobile drawer & backdrop -->
+      <div id="mobile-overlay" class="mobile-overlay" hidden></div>
+      <div id="mobile-menu" class="mobile-menu" hidden aria-hidden="true">
+        <nav class="mobile-nav" aria-label="Mobile navigation">
+          <a href="#home" class="mobile-nav-link active">Home</a>
+          <a href="#product" class="mobile-nav-link">Product</a>
+          <a href="#case-studies" class="mobile-nav-link">Case Studies</a>
+          <a href="#contact" class="mobile-nav-link">Contact</a>
+        </nav>
+        <div class="mobile-menu-actions">
+          <a href="#signin" class="btn-signin mobile-signin">Sign In</a>
+        </div>
+      </div>
+
+      <!-- 2. Hero Region (centered) -->
+      <main class="hero">
+        <!-- Trust row -->
+        <div class="trust-row anim" style="--d: 0.05s">
+          <div class="trust-avatars">
+            <div class="trust-avatar avatar-1" aria-label="Microsoft">
+              <span class="trust-avatar-inner">
+                <i class="fa-brands fa-microsoft" aria-hidden="true"></i>
+              </span>
+            </div>
+            <div class="trust-avatar avatar-2" aria-label="Amazon">
+              <span class="trust-avatar-inner">
+                <i class="fa-brands fa-amazon" aria-hidden="true"></i>
+              </span>
+            </div>
+            <div class="trust-avatar avatar-3" aria-label="Google">
+              <span class="trust-avatar-inner">
+                <i class="fa-brands fa-google" aria-hidden="true"></i>
+              </span>
+            </div>
+          </div>
+          <div class="trust-pill">
+            <span class="trust-pill-text">Trusted by 2000+ Enterprises</span>
+          </div>
+        </div>
+
+        <!-- Headline -->
+        <h1 class="headline anim">
+          <span class="headline-line line-1">Intelligence</span>
+          <span class="headline-line line-2">Designed To Evolve</span>
+        </h1>
+
+        <!-- Subhead -->
+        <p class="subhead anim" style="--d: 0.28s">
+          Build applications that reason, adapt and collaborate using a modular
+          AI platform designed for production.
+        </p>
+
+        <!-- CTA -->
+        <div class="cta-wrapper anim" style="--d: 0.4s">
+          <a href="#get-started" class="cta-btn">Get Started</a>
+        </div>
+      </main>
+
+      <!-- 3. Stats Footer -->
+      <footer class="stats-footer">
+        <div class="stats-grid">
+          <div
+            class="stat-item anim"
+            style="--d: 0.5s"
+            data-target="120"
+            data-suffix="ms"
+            data-decimals="0"
+          >
+            <div class="stat-icon" aria-hidden="true">&lt;</div>
+            <div class="stat-value">
+              <span class="stat-num">0</span><span class="stat-suffix">ms</span>
+            </div>
+            <div class="stat-label">Inference Time</div>
+          </div>
+
+          <div
+            class="stat-item anim"
+            style="--d: 0.58s"
+            data-target="99.99"
+            data-suffix="%"
+            data-decimals="2"
+          >
+            <div class="stat-icon" aria-hidden="true">%</div>
+            <div class="stat-value">
+              <span class="stat-num">0.00</span><span class="stat-suffix">%</span>
+            </div>
+            <div class="stat-label">Platform Uptime</div>
+          </div>
+
+          <div
+            class="stat-item anim"
+            style="--d: 0.66s"
+            data-target="24"
+            data-suffix="/7"
+            data-decimals="0"
+          >
+            <div class="stat-icon" aria-hidden="true">*</div>
+            <div class="stat-value">
+              <span class="stat-num">0</span><span class="stat-suffix">/7</span>
+            </div>
+            <div class="stat-label">Autonomous Runtime</div>
+          </div>
+
+          <div
+            class="stat-item anim"
+            style="--d: 0.74s"
+            data-target="2.4"
+            data-suffix="M"
+            data-decimals="1"
+          >
+            <div class="stat-icon" aria-hidden="true">#</div>
+            <div class="stat-value">
+              <span class="stat-num">0.0</span><span class="stat-suffix">M</span>
+            </div>
+            <div class="stat-label">Context Windows</div>
+          </div>
+        </div>
+      </footer>
+    </div>
+
+    <!-- Full-screen subpages (nav destinations) -->
+    <section class="subpage" id="page-product" data-subpage aria-hidden="true">
+      <div class="subpage-bar">
+        <a class="subpage-home" href="#home" data-sp-home><img src="assets/logo.webp" alt="" width="30" height="30" class="logo-img" />Intelligence</a>
+        <button class="subpage-back" type="button" data-sp-close>← Back</button>
+      </div>
+      <div class="subpage-body">
+        <p class="subpage-kicker">Product</p>
+        <h1 class="subpage-title">Composable by design</h1>
+        <p class="subpage-lead">Composable agents, tools, and memory you can wire into production workflows, with tracing, guardrails, and evaluation built in from day one.</p>
+        <div class="subpage-grid">
+          <div class="subpage-card"><h3>Agents</h3><p>Role-scoped workers with their own tools and memory. Compose them into multi-step pipelines or let them collaborate.</p></div>
+          <div class="subpage-card"><h3>Tool runtime</h3><p>Typed tool calls with retries, timeouts, and sandboxing. Bring your own functions or use the built-in library.</p></div>
+          <div class="subpage-card"><h3>Memory</h3><p>Short-term context, long-term stores, and retrieval that stays inside your compliance boundary.</p></div>
+          <div class="subpage-card"><h3>Guardrails</h3><p>Policy checks on every input and output, with redaction and escalation paths you define.</p></div>
+          <div class="subpage-card"><h3>Evaluations</h3><p>Regression suites for prompts and agents, run automatically on every deploy.</p></div>
+          <div class="subpage-card"><h3>Tracing</h3><p>Full request timelines down to each token — debug production behavior in minutes, not days.</p></div>
+        </div>
+      </div>
+    </section>
+
+    <section class="subpage" id="page-case-studies" data-subpage aria-hidden="true">
+      <div class="subpage-bar">
+        <a class="subpage-home" href="#home" data-sp-home><img src="assets/logo.webp" alt="" width="30" height="30" class="logo-img" />Intelligence</a>
+        <button class="subpage-back" type="button" data-sp-close>← Back</button>
+      </div>
+      <div class="subpage-body">
+        <p class="subpage-kicker">Case Studies</p>
+        <h1 class="subpage-title">In production, at scale</h1>
+        <p class="subpage-lead">Teams already run 120ms inferences and 2.4M-token context windows on the platform. Full write-ups are on the way — get in touch and we will walk you through them.</p>
+        <div class="subpage-grid">
+          <div class="subpage-card"><h3>Financial services</h3><p>A risk team moved document review from 3 days to 40 minutes with an evaluation-gated agent pipeline.</p></div>
+          <div class="subpage-card"><h3>Logistics</h3><p>Exception handling across 40 depots — agents triage disruptions, humans approve the calls that matter.</p></div>
+          <div class="subpage-card"><h3>Healthcare ops</h3><p>Prior-authorization drafting with guardrails that keep every output inside the compliance envelope.</p></div>
+        </div>
+      </div>
+    </section>
+
+    <section class="subpage" id="page-contact" data-subpage aria-hidden="true">
+      <div class="subpage-bar">
+        <a class="subpage-home" href="#home" data-sp-home><img src="assets/logo.webp" alt="" width="30" height="30" class="logo-img" />Intelligence</a>
+        <button class="subpage-back" type="button" data-sp-close>← Back</button>
+      </div>
+      <div class="subpage-body">
+        <p class="subpage-kicker">Contact</p>
+        <h1 class="subpage-title">Talk to the team</h1>
+        <p class="subpage-lead">Questions, partnerships, or a pilot in mind? We reply within one business day.</p>
+        <div class="subpage-contact">
+          <div class="subpage-card"><h3>General</h3><p>Product questions and feedback.</p><a href="mailto:hello@intelligence.example">hello@intelligence.example</a></div>
+          <div class="subpage-card"><h3>Sales</h3><p>Pilots, pricing, and procurement.</p><a href="mailto:sales@intelligence.example">sales@intelligence.example</a></div>
+          <div class="subpage-card"><h3>Support</h3><p>Existing customers, incidents, and SLAs.</p><a href="mailto:support@intelligence.example">support@intelligence.example</a></div>
+        </div>
+      </div>
+    </section>
+
+    <section class="subpage" id="page-get-started" data-subpage aria-hidden="true">
+      <div class="subpage-bar">
+        <a class="subpage-home" href="#home" data-sp-home><img src="assets/logo.webp" alt="" width="30" height="30" class="logo-img" />Intelligence</a>
+        <button class="subpage-back" type="button" data-sp-close>← Back</button>
+      </div>
+      <div class="subpage-body">
+        <p class="subpage-kicker">Get Started</p>
+        <h1 class="subpage-title">Ship your first agent this week</h1>
+        <p class="subpage-lead">Self-serve sign-up opens soon. Until then, leave us a note and we will set you up with a sandbox workspace and an onboarding session.</p>
+        <ol class="subpage-list">
+          <li><strong>Say hello</strong>Tell us what you want to automate and which systems are involved.</li>
+          <li><strong>Sandbox workspace</strong>We provision an isolated environment with sample data the same day.</li>
+          <li><strong>Onboarding session</strong>A 45-minute working call — you leave with a running agent, not slides.</li>
+          <li><strong>Production path</strong>We help wire tracing, guardrails, and evaluations before you go live.</li>
+        </ol>
+        <div class="subpage-cta"><a href="mailto:hello@intelligence.example?subject=Get%20started">Request a sandbox</a><a class="ghost" href="#contact">Contact us</a></div>
+      </div>
+    </section>
+
+    <section class="subpage" id="page-signin" data-subpage aria-hidden="true">
+      <div class="subpage-bar">
+        <a class="subpage-home" href="#home" data-sp-home><img src="assets/logo.webp" alt="" width="30" height="30" class="logo-img" />Intelligence</a>
+        <button class="subpage-back" type="button" data-sp-close>← Back</button>
+      </div>
+      <div class="subpage-body">
+        <p class="subpage-kicker">Sign In</p>
+        <h1 class="subpage-title">Welcome back</h1>
+        <p class="subpage-lead">Accounts are opening soon. Existing partners can request access from their workspace admin, or reach us and we will get you in.</p>
+        <div class="subpage-grid">
+          <div class="subpage-card"><h3>Existing partners</h3><p>Ask your workspace admin to invite you — sign-in arrives by email within minutes.</p></div>
+          <div class="subpage-card"><h3>New here?</h3><p>Request access and we will provision a trial workspace for your team.</p></div>
+          <div class="subpage-card"><h3>Need help?</h3><p>Write to support and a human will get you unstuck.</p><a href="mailto:support@intelligence.example">support@intelligence.example</a></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Section overlay panel (hash links without targets) -->
+    <div class="info-overlay" id="info-overlay" hidden>
+      <div class="info-card" role="dialog" aria-modal="true" aria-labelledby="info-title">
+        <button class="info-close" id="info-close" type="button" aria-label="Close panel">
+          <svg viewBox="0 0 12 12" fill="none" aria-hidden="true">
+            <path d="M1 1l10 10M11 1L1 11" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" />
+          </svg>
+        </button>
+        <p class="info-kicker" id="info-kicker">Intelligence</p>
+        <h2 class="info-title" id="info-title"></h2>
+        <p class="info-body" id="info-body"></p>
+      </div>
+    </div>
+
+    <script src="./main.js" defer></script>
+  </body>
+</html>

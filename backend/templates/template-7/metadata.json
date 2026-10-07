@@ -1,0 +1,6 @@
+{
+  "name": "Ethan Vale — I See Through the Wild",
+  "description": "Wildlife photography archive by Ethan Vale. Field notes from natural encounters, captured without intervention.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

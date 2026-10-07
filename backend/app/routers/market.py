@@ -17,7 +17,10 @@ from .build import _llm_html, _clean
 
 router = APIRouter(prefix="/market", tags=["market"])
 
-TEMPLATES_DIR = Path(os.environ.get("TEMPLATES_DIR", "/Users/nixbh/Desktop/templates"))
+# Templates ship with the repo (backend/templates) so the market works on any
+# host; TEMPLATES_DIR overrides for local dev.
+_DEFAULT_DIR = Path(__file__).resolve().parents[2] / "templates"
+TEMPLATES_DIR = Path(os.environ.get("TEMPLATES_DIR") or _DEFAULT_DIR)
 _ID_RE = re.compile(r"^template-\d+$")
 # template-8 is a duplicate of template-7 — keep it on disk, hide it from the market
 _HIDDEN = {"template-3", "template-8", "template-9"}  # removed/retired from store
