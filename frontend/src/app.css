@@ -638,6 +638,7 @@ input[type="range"] { width: 100%; accent-color: var(--accent); }
   overflow: hidden; background: #fff;
 }
 .bprev iframe { width: 100%; height: 100%; border: 0; display: block; }
+.bprev-load { display: flex; align-items: center; justify-content: center; background: var(--surface); color: var(--faint); font-size: 14px; }
 .bbar {
   display: flex; align-items: center; gap: 14px; flex-wrap: wrap;
   padding: 12px 14px; border: 1px solid var(--border); border-radius: 14px; background: var(--surface);

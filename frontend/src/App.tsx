@@ -681,9 +681,11 @@ function BuildPanel({ seed, onConsumed, conversationId, onBuilt, onNewBuild }: {
   })
   /* reopening a saved build chat: hydrate from the server (survives refresh) */
   const hydrated = useRef(false)
+  const [loadingConv, setLoadingConv] = useState(!!conversationId)
   useEffect(() => {
     if (!conversationId || hydrated.current) return
     hydrated.current = true
+    setLoadingConv(true)
     let dead = false
     ;(async () => {
       try {
@@ -691,6 +693,7 @@ function BuildPanel({ seed, onConsumed, conversationId, onBuilt, onNewBuild }: {
         if (dead) return
         setHtml(d.html || ''); setJobId(d.job_id || ''); setSiteName(d.name || ''); setPub(d.pub || null)
       } catch { /* no build stored */ }
+      if (!dead) setLoadingConv(false)
     })()
     return () => { dead = true }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -801,6 +804,14 @@ function BuildPanel({ seed, onConsumed, conversationId, onBuilt, onNewBuild }: {
     } catch { /* download failed */ }
   }
   const liveUrl = pub ? API + pub.url : ''
+  /* hydrating a saved build: don't flash the empty screen */
+  if (loadingConv) {
+    return (
+      <div className="bwrap">
+        <div className="bprev bprev-load">Loading your site…</div>
+      </div>
+    )
+  }
   /* no site yet → describe-and-build screen */
   if (!html) {
     const msgs: Msg[] = log.map(l => l.startsWith('$ ')
@@ -1216,11 +1227,24 @@ export default function App() {
     setBuildConvId(null)
     setView('build'); setSideOpen(false)
   }
-  /* reopen a saved build chat in the Build & Run workspace */
+  /* reopen a saved build chat: if the server has the site → Build & Run,
+     otherwise fall back to the chat thread (old 🔨 builds with no stored html) */
   function openBuildConv(id: string) {
-    setBuildConvId(id)
-    setBuildSeed(s => ({ k: s.k + 1, p: '' }))
-    setView('build'); setSideOpen(false)
+    setSideOpen(false)
+    let dead = false
+    ;(async () => {
+      try {
+        const d = await api(`/build/conversation/${id}`, {}, 20000)
+        if (dead) return
+        if (d?.html) {
+          setBuildConvId(id)
+          setBuildSeed(s => ({ k: s.k + 1, p: '' }))
+          setView('build')
+          return
+        }
+      } catch { /* no stored build for this chat */ }
+      if (!dead) { setConvId(id); setView('chat') }
+    })()
   }
   /* header mode selector: Chat ⇄ Build & Run (same workspace, different mode) */
   const [modeOpen, setModeOpen] = useState(false)
