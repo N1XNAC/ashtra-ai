@@ -5,14 +5,17 @@ GET  /build/zip/{job_id} → download it as website.zip (index.html).
 """
 import asyncio
 import io
+import json
 import logging
+import os
 import re
 import time
 import uuid
 import zipfile
+from pathlib import Path
 
 import httpx
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
@@ -107,6 +110,34 @@ class BuildRequest(BaseModel):
     user_id: str = "master-001"
     prompt: str
     template: str = ""
+    # Web Market template id (template-N). When set, the exact template HTML
+    # is used as the base 1:1 and the LLM only applies the user's changes.
+    template_id: str = ""
+
+
+# --- Web Market templates (same catalog the /market router serves) ---
+_DEFAULT_TPL_DIR = Path(__file__).resolve().parents[2] / "templates"
+TPL_DIR = Path(os.environ.get("TEMPLATES_DIR") or _DEFAULT_TPL_DIR)
+_TPL_ID_RE = re.compile(r"^template-\d+$")
+_TPL_HIDDEN = {"template-3", "template-8", "template-9"}  # retired/duplicate
+
+
+def _market_template_html(tid: str) -> tuple[str, str] | None:
+    """Load the exact on-disk template → (html, display name) or None if unknown."""
+    if not tid or not _TPL_ID_RE.match(tid) or tid in _TPL_HIDDEN:
+        return None
+    base = (TPL_DIR / tid).resolve()
+    idx = base / "index.html"
+    if not base.is_dir() or not idx.is_file():
+        return None
+    name = tid
+    meta = base / "metadata.json"
+    if meta.is_file():
+        try:
+            name = json.loads(meta.read_text(encoding="utf-8")).get("name") or tid
+        except Exception:
+            pass
+    return idx.read_text(encoding="utf-8", errors="ignore"), name
 
 
 _UNDERSTAND_SYS = """You are the intake designer for an AI website builder.
@@ -242,11 +273,96 @@ def list_templates():
     }
 
 
+_TPL_EDIT_SYS = (
+    "You are a senior front-end developer customizing a real, complete website "
+    "template (single HTML file, inline CSS/JS, may reference its own assets/ "
+    "folder). The template HTML below IS the site — keep it 1:1: same structure, "
+    "sections, styles, scripts, fonts, images, animations, and overall design. "
+    "Apply ONLY the user's requested changes on top of it (copy, colors, names, "
+    "content, added/removed sections they explicitly ask for). Never redesign, "
+    "simplify, rewrite from scratch, or invent a different layout. "
+    "Rules: output the COMPLETE HTML file, no markdown fences, no explanations; "
+    "keep the <base> tag exactly as provided; never leave placeholders/TODOs; "
+    "keep it working and responsive; content must stay visible without JavaScript."
+)
+
+
 @router.post("/website")
-async def build_website(req: BuildRequest, db: Session = Depends(get_db)):
+async def build_website(req: BuildRequest, request: Request, db: Session = Depends(get_db)):
     prompt = req.prompt.strip()
     if not prompt:
         raise HTTPException(status_code=400, detail="Prompt is empty.")
+    # Web Market template flow: "Use template" seeds the prompt with the
+    # template id — load that exact template and customize it 1:1 instead of
+    # generating a new site from scratch.
+    tid = (req.template_id or "").strip()
+    if not tid:
+        m = re.search(r"\btemplate-\d+\b", prompt)
+        tid = m.group(0) if m else ""
+    loaded = _market_template_html(tid) if tid else None
+    if loaded:
+        html, tname = loaded
+        # strip the "Customize the … template (id: …) for my business:" seed
+        custom = re.sub(
+            r"(?is)^\s*customize the .*?template\s*\(id:\s*template-\d+\)\s*"
+            r"for my business\s*:?\s*",
+            "", prompt).strip()
+        if custom:
+            # absolute base so assets/ resolve in srcDoc preview AND /build/site/{slug}
+            base = f'<base href="{str(request.base_url).rstrip("/")}/market/file/{tid}/">'
+            if not re.search(r"<base\s", html, re.I):
+                if re.search(r"<head[^>]*>", html, re.I):
+                    html = re.sub(r"(<head[^>]*>)", r"\1" + base, html, count=1, flags=re.I)
+                else:
+                    html = base + html
+            model = (getattr(settings, "build_model", "") or settings.groq_model
+                     or "openai/gpt-oss-120b")
+            try:
+                out = await _llm_html([
+                    {"role": "system", "content": _TPL_EDIT_SYS},
+                    {"role": "user", "content": (
+                        f"CHANGE REQUEST: {custom}\n\nTEMPLATE HTML:\n{html}")},
+                ], model, 14000, "medium")
+                cand = _clean(out)
+                # only accept a complete rewrite of the same template; otherwise
+                # fall back to the exact untouched template (still a valid site)
+                if ("</html>" in cand.lower() and "<html" in cand.lower()
+                        and not _PLACEHOLDER_RE.search(cand)):
+                    html = cand
+            except HTTPException:
+                raise
+            except Exception as e:
+                _log.warning("template customize failed (%s) — serving exact template",
+                             type(e).__name__)
+        name = re.sub(r"[^a-z0-9]+", "-", (custom or tname).lower()).strip("-")[:40] or "site"
+        job_id = uuid.uuid4().hex[:12]
+        _JOBS[job_id] = {"name": name, "html": html, "ts": time.time()}
+        for k in [k for k, v in _JOBS.items() if time.time() - v["ts"] > 3600]:
+            _JOBS.pop(k, None)
+        try:
+            user = db.query(models.User).filter_by(id=req.user_id).first()
+            if not user:
+                user = models.User(id=req.user_id, email=f"{req.user_id}@local")
+                db.add(user)
+                db.commit()
+            conv = models.Conversation(user_id=user.id, title=name)
+            db.add(conv)
+            db.commit()
+            db.add(models.Message(conversation_id=conv.id, role="user", content=prompt))
+            db.add(models.Message(conversation_id=conv.id, role="assistant",
+                                  content=f"Started from the **{tname}** template "
+                                          f"({tid}) — customized and ready. Open "
+                                          f"Build & Run to preview and publish."))
+            db.add(models.BuildSite(conversation_id=conv.id, job_id=job_id, html=html))
+            db.commit()
+        except Exception:
+            try:
+                db.rollback()
+            except Exception:
+                pass
+        return {"job_id": job_id, "name": name, "template": tid, "html": html,
+                "style_ref": tname, "truncated": False,
+                "conversation_id": conv.id if "conv" in locals() else None}
     # Stage 1 — understand the demand before writing any code.
     # What AZX already remembers about the user makes the spec personal
     # ("my bakery" → knows the name, city, tone without being told again).

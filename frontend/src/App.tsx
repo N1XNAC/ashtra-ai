@@ -679,12 +679,12 @@ function BuildPanel({ seed, onConsumed, conversationId, onBuilt, onNewBuild }: {
     if (conversationId) return null
     try { return JSON.parse(localStorage.getItem('ashtra-build-v1') || '{}').pub || null } catch { return null }
   })
-  /* reopening a saved build chat: hydrate from the server (survives refresh) */
-  const hydrated = useRef(false)
+  /* reopening a saved build chat: hydrate from the server (survives refresh).
+     No ref-guard: StrictMode double-invokes effects and a guard would leave
+     the first (cancelled) run as the only one, pinning the loading state. */
   const [loadingConv, setLoadingConv] = useState(!!conversationId)
   useEffect(() => {
-    if (!conversationId || hydrated.current) return
-    hydrated.current = true
+    if (!conversationId) return
     setLoadingConv(true)
     let dead = false
     ;(async () => {
