@@ -135,7 +135,7 @@ button, input, textarea { font-family: inherit; }
 .burger { border: 0; background: none; color: var(--text); cursor: pointer; padding: 4px; border-radius: 8px; }
 .burger:hover { background: var(--hover); }
 .top-new { margin-left: auto; }
-.mode-wrap { position: relative; margin: 0 auto; }
+.mode-wrap { position: absolute; left: 50%; transform: translateX(-50%); }
 .mode-sel {
   display: flex; align-items: center; gap: 6px;
   border: 0; background: none; color: var(--text);
@@ -389,7 +389,8 @@ input[type="range"] { width: 100%; accent-color: var(--accent); }
     border-right: 1px solid var(--glass-bright);
   }
   .side.open { transform: none; }
-  .scrim { display: block; position: fixed; inset: 0; z-index: 20; background: rgba(0,0,0,.5);
+  .scrim { display: block; position: fixed; inset: 0; z-index: 20; background: rgba(0,0,0,.45);
+    -webkit-backdrop-filter: blur(18px) saturate(1.1); backdrop-filter: blur(18px) saturate(1.1);
     animation: fade-in .2s var(--settle); }
   .burger { display: block; border: 0; background: none; color: var(--text); font-size: 20px; cursor: pointer; }
   .suggest { grid-template-columns: 1fr; }
@@ -412,6 +413,7 @@ input[type="range"] { width: 100%; accent-color: var(--accent); }
 .no-fx .sug:hover, .no-fx .side {
   backdrop-filter: none !important; -webkit-backdrop-filter: none !important;
 }
+.no-fx .scrim { backdrop-filter: none !important; -webkit-backdrop-filter: none !important; }
 .no-fx .topbar { background: var(--bg); }
 .no-fx .composer-box { background: var(--surface-2); }
 .no-fx .conv.on { background: var(--bubble-user); }

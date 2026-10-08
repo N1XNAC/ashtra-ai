@@ -384,7 +384,7 @@ async def build_website(req: BuildRequest, db: Session = Depends(get_db)):
 
 @router.get("/conversation/{conv_id}")
 def build_for_conversation(conv_id: str, db: Session = Depends(get_db)):
-    """Latest built site for a build chat — powers Preview when the chat reopens."""
+    """Latest built site for a build chat — powers the Build & Run screen on reopen."""
     row = (db.query(models.BuildSite)
            .filter_by(conversation_id=conv_id)
            .order_by(models.BuildSite.created_at.desc())
@@ -392,7 +392,12 @@ def build_for_conversation(conv_id: str, db: Session = Depends(get_db)):
     if not row:
         raise HTTPException(status_code=404, detail="No build for this chat.")
     _JOBS.setdefault(row.job_id, {"name": row.job_id, "html": row.html, "ts": time.time()})
-    return {"job_id": row.job_id, "html": row.html}
+    conv = db.query(models.Conversation).filter_by(id=conv_id).first()
+    pub = db.query(models.PublishedSite).filter_by(job_id=row.job_id).first()
+    return {"job_id": row.job_id, "html": row.html,
+            "name": (conv.title if conv else row.job_id),
+            "pub": ({"slug": pub.slug, "name": pub.name,
+                     "url": f"/build/site/{pub.slug}"} if pub else None)}
 
 
 def _load_job_html(job_id: str, db: Session) -> dict:

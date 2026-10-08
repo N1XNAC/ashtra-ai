@@ -16,7 +16,9 @@ def directives(profile) -> str:
         "bullets": "Default to bullet lists.",
         "tutorial": "Default to step-by-step tutorial format.",
         "code-first": "Lead with code, then brief explanation.",
-        "chat": "Natural conversational flow.",
+        "chat": ("Natural conversational flow. NEVER output code blocks, code "
+                 "snippets, code menus, or programming syntax unless the user "
+                 "explicitly asks for code — reply in plain text like a chat."),
     }
     teach_map = {
         "examples": "Teach with practical examples first.",

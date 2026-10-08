@@ -42,34 +42,40 @@ def get_db():
 def ensure_phase3_columns():
     """Lightweight SQLite/Postgres migration: add Phase-3 profile columns if missing."""
     from sqlalchemy import text
-    new_cols = {
-        "explanation_depth": "VARCHAR DEFAULT 'balanced'",
-        "communication_format": "VARCHAR DEFAULT 'chat'",
-        "teaching_style": "VARCHAR DEFAULT 'examples'",
-        "expertise_level": "VARCHAR DEFAULT 'intermediate'",
-        "behaviour_signals": "JSON",
+    migrations = {
+        "user_profiles": {
+            "explanation_depth": "VARCHAR DEFAULT 'balanced'",
+            "communication_format": "VARCHAR DEFAULT 'chat'",
+            "teaching_style": "VARCHAR DEFAULT 'examples'",
+            "expertise_level": "VARCHAR DEFAULT 'intermediate'",
+            "behaviour_signals": "JSON",
+        },
+        "memories": {
+            "embedding": "TEXT",  # pgvector — exact nearest-neighbour search
+        },
     }
-    with engine.connect() as conn:
-        try:
-            existing = {r[1] for r in conn.execute(text("PRAGMA table_info(user_profiles)"))} \
-                if engine.dialect.name == "sqlite" else None
-        except Exception:
-            existing = None
-        if existing is None:  # postgres path: try add, ignore if exists
-            for col, ddl in new_cols.items():
+    for table, new_cols in migrations.items():
+        with engine.connect() as conn:
+            try:
+                existing = {r[1] for r in conn.execute(text(f"PRAGMA table_info({table})"))} \
+                    if engine.dialect.name == "sqlite" else None
+            except Exception:
+                existing = None
+            if existing is None:  # postgres path: try add, ignore if exists
+                for col, ddl in new_cols.items():
+                    try:
+                        conn.execute(text(f"ALTER TABLE {table} ADD COLUMN {col} {ddl}"))
+                    except Exception:
+                        pass
                 try:
-                    conn.execute(text(f"ALTER TABLE user_profiles ADD COLUMN {col} {ddl}"))
+                    conn.commit()
                 except Exception:
                     pass
+                continue
+            for col, ddl in new_cols.items():
+                if col not in existing:
+                    conn.execute(text(f"ALTER TABLE {table} ADD COLUMN {col} {ddl}"))
             try:
                 conn.commit()
             except Exception:
                 pass
-            return
-        for col, ddl in new_cols.items():
-            if col not in existing:
-                conn.execute(text(f"ALTER TABLE user_profiles ADD COLUMN {col} {ddl}"))
-        try:
-            conn.commit()
-        except Exception:
-            pass

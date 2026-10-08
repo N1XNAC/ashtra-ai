@@ -134,7 +134,7 @@ function renderMd(src: string) {
 }
 
 /* ---------- types ---------- */
-type View = 'chat' | 'library' | 'projects' | 'scheduled' | 'plugins' | 'build' | 'market' | 'memory' | 'goals' | 'you' | 'settings'
+type View = 'chat' | 'library' | 'projects' | 'plugins' | 'build' | 'market' | 'memory' | 'you' | 'settings'
 type Msg = { role: string; content: string; meta?: string; fresh?: boolean; attachment?: string; saved?: string[] }
 type Conv = { id: string; title: string; created_at?: string; is_build?: boolean }
 /* Per-chat session: drafts, attachments, messages and working state live here,
@@ -289,34 +289,7 @@ function Chat({ convId, sessKey, sess, patchSess, onNewConv, refreshSidebar, onD
   const [deep, setDeep] = useState(() => {
     try { return localStorage.getItem('ashtra-deep') === 'on' } catch { return false }
   })
-  /* 🔨 build chats: always offer Preview — html is re-fetched from the server */
-  const [site, setSite] = useState<{ job_id: string; html: string } | null>(null)
-  const [siteOpen, setSiteOpen] = useState(false)
-  useEffect(() => {
-    setSite(null); setSiteOpen(false)
-    if (!isBuild || !convId) return
-    let cancelled = false
-    ;(async () => {
-      try {
-        const d = await api(`/build/conversation/${convId}`)
-        if (!cancelled && d?.html) setSite(d)
-      } catch { /* no build stored */ }
-    })()
-    return () => { cancelled = true }
-  }, [convId, isBuild])
-  async function downloadZip() {
-    if (!site) return
-    try {
-      const headers: Record<string, string> = {}
-      if (API_KEY) headers['X-API-Key'] = API_KEY
-      const r = await fetch(API + '/build/zip/' + site.job_id, { headers })
-      if (!r.ok) throw new Error(`HTTP ${r.status}`)
-      const url = URL.createObjectURL(await r.blob())
-      const a = document.createElement('a')
-      a.href = url; a.download = 'website.zip'; a.click()
-      setTimeout(() => URL.revokeObjectURL(url), 5000)
-    } catch { /* download failed */ }
-  }
+  /* build chats open in the Build & Run workspace — Chat is plain chat only */
   const [phase, setPhase] = useState(0) /* rotating status while busy */
   const PHASES = ['Thinking', 'Recalling memories', 'Drafting reply', 'Polishing']
   /* site-building intent → gentle nudge to Build & Run (once per send attempt) */
@@ -459,13 +432,8 @@ function Chat({ convId, sessKey, sess, patchSess, onNewConv, refreshSidebar, onD
       </div>
     </div>
   )
-  const buildIdx = (site && cached)
-    ? cached.map((m, i) => m.role === 'assistant' ? i : -1).filter(i => i >= 0).pop() ?? null
-    : null
   return (
     <ThreadShell msgs={cached} busy={busy} status={busyLabel || `${PHASES[phase]}…`} empty={welcome}
-      actionIndex={site ? buildIdx : null}
-      action={site ? <button className="mini" onClick={() => setSiteOpen(true)}>Preview</button> : null}
       composer={<ComposerShell
         head={<>
           {buildHint && (
@@ -509,21 +477,18 @@ function Chat({ convId, sessKey, sess, patchSess, onNewConv, refreshSidebar, onD
         canSend={!(busy || cached === null || (!input.trim() && !attach))}
         onSend={() => send()} sendLabel="Send" />
       }
-      footer={<>
-        {siteOpen && site && <SiteModal html={site.html} onClose={() => setSiteOpen(false)} onDownload={downloadZip} />}
-        <div className="hint">AZX can make mistakes. Memories are transparent and exportable.</div>
-      </>} />
+      footer={<div className="hint">AZX can make mistakes. Memories are transparent and exportable.</div>} />
   )
 }
 
 /* ---------- sidebar ---------- */
-function Sidebar({ view, setView, convId, setConvId, convs, onNew, onDelete, onDeleteMany, open, close, name, onBuild }: {
+function Sidebar({ view, setView, convId, setConvId, convs, onNew, onDelete, onDeleteMany, open, close, name, onBuild, onOpenBuild }: {
   view: View; setView: (v: View) => void
   convId: string | null; setConvId: (id: string | null) => void
   convs: Conv[]; onNew: () => void; onDelete: (id: string) => void
   onDeleteMany: (ids: string[]) => void
   open: boolean; close: () => void
-  name: string; onBuild: () => void
+  name: string; onBuild: () => void; onOpenBuild: (convId: string) => void
 }) {
   const [q, setQ] = useState('')
   /* long-press (or right-click) a chat → multi-select delete mode */
@@ -587,13 +552,16 @@ function Sidebar({ view, setView, convId, setConvId, convs, onNew, onDelete, onD
         <div className="convlist">
           {rows.map(c => (
             <button key={c.id}
-              className={`conv${convId === c.id && view === 'chat' && !selMode ? ' on' : ''}${selMode ? ' selmode' : ''}${sel.has(c.id) ? ' sel' : ''}`}
+              className={`conv${convId === c.id && (view === 'chat' || view === 'build') && !selMode ? ' on' : ''}${selMode ? ' selmode' : ''}${sel.has(c.id) ? ' sel' : ''}`}
               onPointerDown={() => startPress(c.id)}
               onPointerUp={cancelPress} onPointerLeave={cancelPress} onPointerCancel={cancelPress}
               onContextMenu={e => { e.preventDefault(); cancelPress(); if (!selMode) { setSelMode(true); setSel(new Set([c.id])) } }}
               onClick={() => {
                 if (selMode) { toggleSel(c.id); return }
-                setConvId(c.id); setView('chat'); close()
+                close()
+                /* build chats reopen in the Build & Run workspace (preview-first) */
+                if (isBuildConv(c)) { onOpenBuild(c.id); return }
+                setConvId(c.id); setView('chat')
               }}>
               {selMode && <span className="tick" aria-hidden="true">{sel.has(c.id) ? '✓' : ''}</span>}
               {!selMode && (isBuildConv(c)
@@ -606,8 +574,6 @@ function Sidebar({ view, setView, convId, setConvId, convs, onNew, onDelete, onD
           {rows.length === 0 && <div className="sect">No chats yet</div>}
         </div>
         <nav className="mnav mnav-more">
-          {row('Goals', 'target', view === 'goals', () => go('goals'))}
-          {row('Scheduled', 'clock', view === 'scheduled', () => go('scheduled'))}
           {row('You', 'user', view === 'you', () => go('you'))}
         </nav>
         <div className="drawer-profile" role="button" tabIndex={0}
@@ -623,9 +589,10 @@ function Sidebar({ view, setView, convId, setConvId, convs, onNew, onDelete, onD
 }
 
 /* ---------- library (conversation history) ---------- */
-function LibraryPanel({ convs, convId, setConvId, setView, onDelete, refresh }: {
+function LibraryPanel({ convs, convId, setConvId, setView, onDelete, refresh, onOpenBuild }: {
   convs: Conv[]; convId: string | null; setConvId: (id: string | null) => void
   setView: (v: View) => void; onDelete: (id: string) => void; refresh: () => void
+  onOpenBuild: (convId: string) => void
 }) {
   const [q, setQ] = useState('')
   useEffect(() => { refresh() }, [])
@@ -637,7 +604,10 @@ function LibraryPanel({ convs, convId, setConvId, setView, onDelete, refresh }: 
       <div className="convlist">
         {rows.map(c => (
           <button key={c.id} className={`conv${convId === c.id ? ' on' : ''}`}
-            onClick={() => { setConvId(c.id); setView('chat') }}>
+            onClick={() => {
+              if (c.is_build || c.title.startsWith('🔨')) { onOpenBuild(c.id); return }
+              setConvId(c.id); setView('chat')
+            }}>
             {(c.is_build || c.title.startsWith('🔨'))
               ? <span className="type-icon"><Icon name="code" size={13} /></span>
               : <span className="type-dot" aria-hidden="true" />}
@@ -654,45 +624,6 @@ function LibraryPanel({ convs, convId, setConvId, setView, onDelete, refresh }: 
 /* ---------- placeholders ---------- */
 function SoonPanel({ title, body }: { title: string; body: string }) {
   return (<div className="panel"><h2>{title}</h2><p className="desc">{body}</p></div>)
-}
-
-/* ---------- scheduled AI messages ---------- */
-type SchedItem = { id: string; prompt: string; run_at: string; done: boolean }
-function ScheduledPanel() {
-  const [prompt, setPrompt] = useState('')
-  const [when, setWhen] = useState('')
-  const [items, setItems] = useState<SchedItem[]>([])
-  async function load() {
-    try { setItems(await api(`/schedule/${USER}`)) } catch { /* offline */ }
-  }
-  useEffect(() => { load() }, [])
-  async function add() {
-    if (!prompt.trim() || !when) return
-    try {
-      await post('/schedule', { user_id: USER, prompt: prompt.trim(), run_at: new Date(when).toISOString() })
-      setPrompt(''); setWhen(''); load()
-    } catch (e) {
-      alert(e instanceof Error ? e.message : 'Could not schedule.')
-    }
-  }
-  return (
-    <div className="panel"><div className="panel-inner">
-      <h2>Scheduled</h2>
-      <p className="desc">Ask now — AZX replies in a new chat at the set time.</p>
-      <div className="toolbar">
-        <input value={prompt} maxLength={500} onChange={e => setPrompt(e.target.value)} placeholder="Message for later…" />
-        <input type="datetime-local" value={when} onChange={e => setWhen(e.target.value)} aria-label="When" />
-        <button className="mini primary" disabled={!prompt.trim() || !when} onClick={add}>Schedule</button>
-      </div>
-      {items.map(i => (
-        <div key={i.id} className="card"><div className="row">
-          <div className="grow"><span className="kind">{i.done ? 'done' : new Date(i.run_at).toLocaleString()}</span>{i.prompt}</div>
-          {!i.done && <button className="mini danger" onClick={async () => { await api(`/schedule/${i.id}`, { method: 'DELETE' }); load() }}>Cancel</button>}
-        </div></div>
-      ))}
-      {items.length === 0 && <div className="card">Nothing scheduled yet.</div>}
-    </div></div>
-  )
 }
 
 const PLUGINS: { t: string; d: string }[] = [
@@ -717,69 +648,14 @@ function PluginsPanel() {
    Traffic lights are real: red = close, yellow = minimize, green = fullscreen
    (click again to exit). External links open in a new tab instead of turning
    the frame black (X-Frame-Options). ---------- */
-function SiteModal({ html, onClose, onDownload }: {
-  html: string; onClose: () => void; onDownload?: () => void
+function BuildPanel({ seed, onConsumed, conversationId, onBuilt, onNewBuild }: {
+  seed?: string; onConsumed?: () => void
+  conversationId?: string | null; onBuilt?: (convId: string) => void
+  onNewBuild?: () => void
 }) {
-  const boxRef = useRef<HTMLDivElement>(null)
-  const frameRef = useRef<HTMLIFrameElement>(null)
-  const [full, setFull] = useState(false)
-  const [min, setMin] = useState(false)
-  useEffect(() => {
-    const h = () => setFull(!!document.fullscreenElement)
-    document.addEventListener('fullscreenchange', h)
-    return () => document.removeEventListener('fullscreenchange', h)
-  }, [])
-  /* route in-frame link clicks to a new tab (frame navigation → black screen) */
-  useEffect(() => {
-    const f = frameRef.current
-    if (!f) return
-    const route = () => {
-      try {
-        f.contentDocument?.addEventListener('click', (e: MouseEvent) => {
-          const a = (e.target as HTMLElement | null)?.closest?.('a')
-          const href = a?.getAttribute('href') || ''
-          if (/^https?:/i.test(href)) {
-            e.preventDefault()
-            window.open(href, '_blank', 'noopener')
-          }
-        })
-      } catch { /* sandboxed — prompt asks for target="_blank" */ }
-    }
-    f.addEventListener('load', route)
-    return () => { f.removeEventListener('load', route) }
-  }, [html])
-  const toggleFull = () => {
-    if (document.fullscreenElement) document.exitFullscreen().catch(() => {})
-    else boxRef.current?.requestFullscreen().catch(() => {})
-  }
-  const toggleMin = () => {
-    if (full) document.exitFullscreen().catch(() => {})
-    setMin(m => !m)
-  }
-  return (
-    <div className="bmodal-scrim" onClick={onClose}>
-      <div className={`bmodal${min ? ' min' : ''}`} ref={boxRef} onClick={e => e.stopPropagation()}>
-        <div className="b-top">
-          <div className="b-circles">
-            <button className="b-c b-ctl" aria-label="Close preview" title="Close" onClick={onClose} />
-            <button className="b-c b-ctl" aria-label={min ? 'Restore preview' : 'Minimize preview'} title={min ? 'Restore' : 'Minimize'} onClick={toggleMin} />
-            <button className={`b-c b-ctl${full ? ' on' : ''}`} aria-label={full ? 'Exit fullscreen' : 'Fullscreen preview'} title={full ? 'Exit fullscreen' : 'Fullscreen'} onClick={toggleFull} />
-          </div>
-          <div className="b-url">{min ? 'preview — minimized' : 'preview'}</div>
-          <button className="iconbtn" aria-label="Close preview" onClick={onClose}><Icon name="x" size={16} /></button>
-        </div>
-        <iframe ref={frameRef} title="preview" className="b-body" srcDoc={html}
-          sandbox="allow-scripts allow-same-origin allow-popups allow-popups-to-escape-sandbox" />
-        {min && <button className="b-restore" onClick={() => setMin(false)}>Restore preview</button>}
-        {!min && onDownload && <div className="b-foot"><button className="mini" onClick={onDownload}>Download zip</button></div>}
-      </div>
-    </div>
-  )
-}
-
-function BuildPanel({ seed, onConsumed }: { seed?: string; onConsumed?: () => void }) {
   const [prompt, setPrompt] = useState('')
   const [log, setLog] = useState<string[]>(() => {
+    if (conversationId) return [] /* server is the source of truth for saved builds */
     try {
       const raw = localStorage.getItem('ashtra-build-v1')
       if (raw) { const d = JSON.parse(raw); if (Array.isArray(d?.log)) return d.log.slice(-50) }
@@ -787,18 +663,38 @@ function BuildPanel({ seed, onConsumed }: { seed?: string; onConsumed?: () => vo
     return []
   })
   const [html, setHtml] = useState(() => {
+    if (conversationId) return ''
     try { return JSON.parse(localStorage.getItem('ashtra-build-v1') || '{}').html || '' } catch { return '' }
   })
   const [jobId, setJobId] = useState(() => {
+    if (conversationId) return ''
     try { return JSON.parse(localStorage.getItem('ashtra-build-v1') || '{}').jobId || '' } catch { return '' }
   })
   const [siteName, setSiteName] = useState(() => {
+    if (conversationId) return ''
     try { return JSON.parse(localStorage.getItem('ashtra-build-v1') || '{}').name || '' } catch { return '' }
   })
   /* publish state — the live URL of this build */
   const [pub, setPub] = useState<{ slug: string; url: string; name: string } | null>(() => {
+    if (conversationId) return null
     try { return JSON.parse(localStorage.getItem('ashtra-build-v1') || '{}').pub || null } catch { return null }
   })
+  /* reopening a saved build chat: hydrate from the server (survives refresh) */
+  const hydrated = useRef(false)
+  useEffect(() => {
+    if (!conversationId || hydrated.current) return
+    hydrated.current = true
+    let dead = false
+    ;(async () => {
+      try {
+        const d = await api(`/build/conversation/${conversationId}`, {}, 30000)
+        if (dead) return
+        setHtml(d.html || ''); setJobId(d.job_id || ''); setSiteName(d.name || ''); setPub(d.pub || null)
+      } catch { /* no build stored */ }
+    })()
+    return () => { dead = true }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [conversationId])
   /* arriving from the chat nudge: fresh build chat with the request typed in */
   const seeded = useRef(false)
   useEffect(() => {
@@ -809,12 +705,13 @@ function BuildPanel({ seed, onConsumed }: { seed?: string; onConsumed?: () => vo
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
   useEffect(() => {
+    if (conversationId) return /* saved builds live on the server, not in the draft slot */
     try {
       localStorage.setItem('ashtra-build-v1', JSON.stringify({
         log: log.slice(-50), html, jobId, name: siteName, pub,
       }))
     } catch { /* quota */ }
-  }, [log, html, jobId, siteName, pub])
+  }, [log, html, jobId, siteName, pub, conversationId])
   const [busy, setBusy] = useState(false)
   const [editBusy, setEditBusy] = useState(false)
   const [pubBusy, setPubBusy] = useState(false)
@@ -844,7 +741,7 @@ function BuildPanel({ seed, onConsumed }: { seed?: string; onConsumed?: () => vo
     const t1 = setTimeout(() => say('> polishing…'), 10000)
     const t2 = setTimeout(() => say('> final touches…'), 22000)
     try {
-      const j = await api('/build/website', { method: 'POST', body: JSON.stringify({ user_id: USER, prompt: p }) }, 200000) as { status?: string; reply?: string; job_id: string; name: string; template: string; html: string; style_ref?: string }
+      const j = await api('/build/website', { method: 'POST', body: JSON.stringify({ user_id: USER, prompt: p }) }, 200000) as { status?: string; reply?: string; job_id: string; name: string; template: string; html: string; style_ref?: string; conversation_id?: string }
       if (j.status === 'chat' || !j.job_id) {
         say(j.reply || 'Tell me what website you want built.')
         persist({})
@@ -852,6 +749,7 @@ function BuildPanel({ seed, onConsumed }: { seed?: string; onConsumed?: () => vo
         say(`> done: ${j.name}`)
         persist({ html: j.html, jobId: j.job_id, name: j.name })
         setHtml(j.html); setJobId(j.job_id); setSiteName(j.name); setPub(null)
+        if (j.conversation_id) onBuilt?.(j.conversation_id)
       }
     } catch (e) {
       say(`> error: ${e instanceof Error ? e.message : 'build failed'}`)
@@ -950,6 +848,7 @@ function BuildPanel({ seed, onConsumed }: { seed?: string; onConsumed?: () => vo
           <button className="mini" onClick={() => {
             try { localStorage.removeItem('ashtra-build-v1') } catch { /* quota */ }
             setHtml(''); setJobId(''); setPub(null); setSiteName(''); setLog([])
+            onNewBuild?.()
           }}>New build</button>
         </div>
       </div>
@@ -1022,59 +921,6 @@ function MemoryPanel() {
           confirmLabel="Forget" onCancel={() => setConfirmDel(null)}
           onConfirm={async () => { await api(`/memories/${confirmDel}`, { method: 'DELETE' }); setConfirmDel(null); load() }} />
       )}
-    </div></div>
-  )
-}
-
-/* ---------- goals panel ---------- */
-type Goal = { id: string; title: string; status: string; progress: number }
-function GoalsPanel() {
-  const [goals, setGoals] = useState<Goal[]>([])
-  const [avg, setAvg] = useState(0)
-  const [draft, setDraft] = useState('')
-  async function load() {
-    try {
-      const d = await api(`/goals/${USER}/dashboard`)
-      setGoals(d.goals); setAvg(d.avg_progress)
-    } catch { /* offline */ }
-  }
-  useEffect(() => { load() }, [])
-  const active = goals.filter(g => g.status !== 'done')
-  const done = goals.filter(g => g.status === 'done')
-  return (
-    <div className="panel"><div className="panel-inner">
-      <h2>Goals</h2>
-      <p className="desc">Track what matters. Chat also understands “add a goal …”.</p>
-      <div className="card"><div className="lab">Average progress</div>
-        <div className="big">{avg}%</div><div className="pbar"><div style={{ width: `${avg}%` }} /></div>
-      </div>
-      <div className="toolbar">
-        <input value={draft} onChange={e => setDraft(e.target.value)}
-          onKeyDown={e => e.key === 'Enter' && draft.trim() && post(`/goals/${USER}`, { title: draft.trim() }).then(() => { setDraft(''); load() })}
-          placeholder="New goal…" />
-        <button className="mini primary" onClick={async () => {
-          if (!draft.trim()) return
-          await post(`/goals/${USER}`, { title: draft.trim() }); setDraft(''); load()
-        }}>Add</button>
-      </div>
-      {active.map(g => (
-        <div key={g.id} className="card"><div className="row">
-          <div className="grow">{g.title}<div className="pbar"><div style={{ width: `${g.progress}%` }} /></div></div>
-          <span className="lab">{g.progress}%</span>
-          <button className="mini" onClick={async () => {
-            await api(`/goals/${g.id}`, { method: 'PATCH', body: JSON.stringify({ status: 'done' }) }); load()
-          }}>Done</button>
-        </div></div>
-      ))}
-      {done.length > 0 && <><div className="lab">Completed</div>
-        {done.map(g => (
-          <div key={g.id} className="card"><div className="row">
-            <div className="grow" style={{ textDecoration: 'line-through', color: 'var(--muted)' }}>{g.title}</div>
-            <button className="mini" onClick={async () => {
-              await api(`/goals/${g.id}`, { method: 'PATCH', body: JSON.stringify({ status: 'active' }) }); load()
-            }}>Reopen</button>
-          </div></div>
-        ))}</>}
     </div></div>
   )
 }
@@ -1275,6 +1121,8 @@ export default function App() {
   })
   /* fresh Build & Run chat seeded from the chat nudge (bump key → remount) */
   const [buildSeed, setBuildSeed] = useState<{ k: number; p: string }>({ k: 0, p: '' })
+  /* open a saved build chat in the Build & Run workspace (survives refresh) */
+  const [buildConvId, setBuildConvId] = useState<string | null>(null)
   /* session store: one entry per chat, survives switching + page reloads */
   const [sessions, setSessions] = useState<Record<string, Sess>>(() => {
     try {
@@ -1365,6 +1213,13 @@ export default function App() {
   function startFreshBuild() {
     try { localStorage.removeItem('ashtra-build-v1') } catch { /* quota */ }
     setBuildSeed(s => ({ k: s.k + 1, p: '' }))
+    setBuildConvId(null)
+    setView('build'); setSideOpen(false)
+  }
+  /* reopen a saved build chat in the Build & Run workspace */
+  function openBuildConv(id: string) {
+    setBuildConvId(id)
+    setBuildSeed(s => ({ k: s.k + 1, p: '' }))
     setView('build'); setSideOpen(false)
   }
   /* header mode selector: Chat ⇄ Build & Run (same workspace, different mode) */
@@ -1382,7 +1237,7 @@ export default function App() {
         convs={convs} onNew={() => { if (sessions['new']?.busy) return; setConvId(null); setView('chat') }}
         onDelete={(id) => setConfirmDel(id)} onDeleteMany={delConvs}
         open={sideOpen} close={() => setSideOpen(false)}
-        name={userName} onBuild={startFreshBuild} />
+        name={userName} onBuild={startFreshBuild} onOpenBuild={openBuildConv} />
       <div className="main">
         <div className="topbar">
           <button className="burger" onClick={() => setSideOpen(o => !o)} aria-label="Toggle sidebar"><Icon name="menu" size={22} /></button>
@@ -1413,12 +1268,14 @@ export default function App() {
           patchSess={patchSess} onNewConv={onNewConv} refreshSidebar={refreshConvs} onDraft={addDraftConv}
           isBuild={convs.find(c => c.id === convId)?.is_build ?? false}
           goBuild={p => { setBuildSeed({ k: Date.now(), p }); setView('build') }} />}
-        {view === 'library' && <LibraryPanel convs={convs} convId={convId} setConvId={setConvId} setView={setView} onDelete={(id) => setConfirmDel(id)} refresh={refreshConvs} />}
+        {view === 'library' && <LibraryPanel convs={convs} convId={convId} setConvId={setConvId} setView={setView} onDelete={(id) => setConfirmDel(id)} refresh={refreshConvs} onOpenBuild={openBuildConv} />}
         {view === 'projects' && <SoonPanel title="Projects" body="Project workspaces are coming soon." />}
-        {view === 'scheduled' && <ScheduledPanel />}
         {view === 'plugins' && <PluginsPanel />}
-        {view === 'build' && <BuildPanel key={buildSeed.k} seed={buildSeed.p}
-          onConsumed={() => setBuildSeed(s => ({ ...s, p: '' }))} />}
+        {view === 'build' && <BuildPanel key={`${buildSeed.k}:${buildConvId ?? ''}`} seed={buildSeed.p}
+          conversationId={buildConvId}
+          onConsumed={() => setBuildSeed(s => ({ ...s, p: '' }))}
+          onBuilt={id => { setBuildConvId(id); refreshConvs() }}
+          onNewBuild={() => { setBuildConvId(null); setBuildSeed(s => ({ k: s.k + 1, p: '' })) }} />}
         {view === 'chat' && busyOthers.length > 0 && (
           <button className="workpill" onClick={() => {
             const k = busyOthers[0][0]
@@ -1430,7 +1287,6 @@ export default function App() {
           </button>
         )}
         {view === 'memory' && <MemoryPanel />}
-        {view === 'goals' && <GoalsPanel />}
         {view === 'you' && <YouPanel name={userName} onName={setUserName} />}
         {view === 'settings' && <SettingsPanel fx={fx} setFx={setFx} />}
         {view === 'market' && <MarketPanel onUse={it => {
