@@ -54,12 +54,16 @@ class ChatResponse(BaseModel):
     adaptation: Dict[str, Any] = {}
     adaptations_made: List[str] = []
     tool_calls: List[Dict[str, Any]] = []
+    # Memories written this turn — surfaced in chat as "Saved to memory".
+    saved: List[str] = []
 
 # --- Conversations (sidebar) ---
 class ConversationOut(BaseModel):
     id: str
     title: str
     created_at: Any = None
+    # True when this chat contains a Build & Run project (</> icon in sidebar).
+    is_build: bool = False
     class Config:
         from_attributes = True
 

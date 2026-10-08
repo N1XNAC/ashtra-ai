@@ -8,10 +8,36 @@ from ..services import ai_core, memory_engine, behavior_analyzer, personality_ad
 from ..services import agent as agent_exec
 from ..services.tools import due_reminders
 import logging
+import re
 
 log = logging.getLogger("ashtra.api")
 
 router = APIRouter(prefix="/chat", tags=["chat"])
+
+_TITLE_SYS = ("Generate a short title (max 6 words) for this conversation. "
+              "Reply with the title only — no quotes, no punctuation at the end.")
+
+
+async def _auto_title(message: str) -> str:
+    """Useful sidebar title from the first message (falls back to a trim)."""
+    fallback = re.sub(r"\s+", " ", message.strip())[:40].strip()
+    try:
+        import httpx
+        async with httpx.AsyncClient(timeout=15) as c:
+            r = await c.post(
+                f"{settings.groq_base_url.rstrip('/')}/chat/completions",
+                headers={"Authorization": f"Bearer {settings.groq_api_key}"},
+                json={"model": settings.groq_model,
+                      "messages": [{"role": "system", "content": _TITLE_SYS},
+                                   {"role": "user", "content": message[:500]}],
+                      "max_tokens": 24, "temperature": 0.2,
+                      "reasoning_effort": "low"},
+            )
+            r.raise_for_status()
+            t = (r.json()["choices"][0]["message"]["content"] or "").strip().strip('"')
+            return (t[:60] or fallback) if t else fallback
+    except Exception:
+        return fallback
 
 def _keyword_profile_hints(text: str) -> dict:
     """Phase-2 interests/goals/skills signals (kept, now alongside behaviour analysis)."""
@@ -53,12 +79,14 @@ async def chat(req: schemas.ChatRequest, request: Request, db: Session = Depends
         db.commit()
 
     conv = None
+    new_conv = False
     if req.conversation_id:
         conv = db.query(models.Conversation).filter_by(id=req.conversation_id, user_id=user.id).first()
     if not conv:
         conv = models.Conversation(user_id=user.id, title=req.message[:40])
         db.add(conv)
         db.commit()
+        new_conv = True
 
     db.add(models.Message(conversation_id=conv.id, role="user", content=req.message))
     db.commit()
@@ -158,6 +186,7 @@ async def chat(req: schemas.ChatRequest, request: Request, db: Session = Depends
     beh = behavior_analyzer.behaviour_memory_candidate(req.message, signals)
     if beh:
         cands.append(beh)
+    saved: list[str] = []
     for cand in cands:
         exists = db.query(models.Memory).filter_by(
             user_id=user.id, content=cand["content"], is_active=True).first()
@@ -167,6 +196,7 @@ async def chat(req: schemas.ChatRequest, request: Request, db: Session = Depends
         db.add(mem)
         db.commit()
         db.refresh(mem)
+        saved.append(mem.content)
         memory_engine.index_memory(mem.id, user.id, mem.content, mem.kind, mem.memory_type, mem.importance)
 
     hints = _keyword_profile_hints(req.message)
@@ -176,6 +206,13 @@ async def chat(req: schemas.ChatRequest, request: Request, db: Session = Depends
 
     db.commit()
     db.refresh(profile)
+    # Auto-title new conversations with something useful for the sidebar.
+    if new_conv:
+        try:
+            conv.title = await _auto_title(req.message)
+            db.commit()
+        except Exception:
+            log.warning("[ASHRA API] auto-title failed", exc_info=True)
     return {
         "conversation_id": conv.id,
         "reply": reply,
@@ -183,6 +220,7 @@ async def chat(req: schemas.ChatRequest, request: Request, db: Session = Depends
         "adaptation": personality_adapter.summary_for_api(profile),
         "adaptations_made": adaptations_made,
         "tool_calls": tool_calls,
+        "saved": saved[:3],
     }
 
 
@@ -194,7 +232,12 @@ def list_conversations(user_id: str, db: Session = Depends(get_db)):
         db.query(models.Conversation).filter_by(user_id=user_id)
         .order_by(models.Conversation.created_at.desc()).limit(100).all()
     )
-    return convs
+    # Conversations that contain a Build & Run project get the </> sidebar icon.
+    build_ids = {row[0] for row in db.query(models.BuildSite.conversation_id).all()}
+    out = [schemas.ConversationOut.model_validate(c) for c in convs]
+    for item in out:
+        item.is_build = item.id in build_ids
+    return out
 
 
 @router.get("/conversations/{user_id}/{conv_id}", response_model=schemas.ConversationDetail)

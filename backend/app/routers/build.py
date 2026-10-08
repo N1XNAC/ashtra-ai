@@ -20,7 +20,7 @@ from sqlalchemy.orm import Session
 from .. import models
 from ..config import settings
 from ..database import get_db
-from ..services import template_bank, web_images
+from ..services import memory_engine, template_bank, web_images
 
 router = APIRouter(prefix="/build", tags=["build"])
 _log = logging.getLogger("ashtra.build")
@@ -158,13 +158,17 @@ def _json_out(text: str) -> dict:
         return {}
 
 
-async def _understand(prompt: str) -> dict:
+async def _understand(prompt: str, mem_ctx: str = "") -> dict:
     """Stage 1 — does the user actually want a site? If so, write the spec."""
+    user_msg = prompt
+    if mem_ctx:
+        user_msg += (f"\n\nWHAT AZX ALREADY REMEMBERS ABOUT THIS USER "
+                     f"(use it — business name, type, location, preferences):\n{mem_ctx}")
     data: dict = {}
     for _attempt in range(3):  # JSON sometimes gets truncated mid-spec — retry
         out = await _llm_html([
             {"role": "system", "content": _UNDERSTAND_SYS},
-            {"role": "user", "content": prompt},
+            {"role": "user", "content": user_msg},
         ], "openai/gpt-oss-20b", 1200, "low")
         data = _json_out(out)
         if data:
@@ -244,8 +248,16 @@ async def build_website(req: BuildRequest, db: Session = Depends(get_db)):
     if not prompt:
         raise HTTPException(status_code=400, detail="Prompt is empty.")
     # Stage 1 — understand the demand before writing any code.
+    # What AZX already remembers about the user makes the spec personal
+    # ("my bakery" → knows the name, city, tone without being told again).
+    mem_ctx = ""
     try:
-        understanding = await _understand(prompt)
+        relevant = memory_engine.retrieve_relevant(req.user_id, prompt, top_k=6)
+        mem_ctx = "\n".join(f"- {h['content']}" for h in relevant if h.get("content"))
+    except Exception:
+        mem_ctx = ""
+    try:
+        understanding = await _understand(prompt, mem_ctx)
     except HTTPException:
         raise
     except Exception as e:
@@ -342,14 +354,15 @@ async def build_website(req: BuildRequest, db: Session = Depends(get_db)):
     # prune old jobs
     for k in [k for k, v in _JOBS.items() if time.time() - v["ts"] > 3600]:
         _JOBS.pop(k, None)
-    # history: show builds in the usual chats menu, flagged 🔨
+    # history: show builds in the usual chats menu — the sidebar marks them
+    # with the </> icon via BuildSite.is_build, no emoji prefix needed.
     try:
         user = db.query(models.User).filter_by(id=req.user_id).first()
         if not user:
             user = models.User(id=req.user_id, email=f"{req.user_id}@local")
             db.add(user)
             db.commit()
-        conv = models.Conversation(user_id=user.id, title=f"🔨 {name}")
+        conv = models.Conversation(user_id=user.id, title=name)
         db.add(conv)
         db.commit()
         db.add(models.Message(conversation_id=conv.id, role="user", content=prompt))
@@ -371,7 +384,7 @@ async def build_website(req: BuildRequest, db: Session = Depends(get_db)):
 
 @router.get("/conversation/{conv_id}")
 def build_for_conversation(conv_id: str, db: Session = Depends(get_db)):
-    """Latest built site for a 🔨 chat — powers Preview when the chat reopens."""
+    """Latest built site for a build chat — powers Preview when the chat reopens."""
     row = (db.query(models.BuildSite)
            .filter_by(conversation_id=conv_id)
            .order_by(models.BuildSite.created_at.desc())
@@ -380,6 +393,113 @@ def build_for_conversation(conv_id: str, db: Session = Depends(get_db)):
         raise HTTPException(status_code=404, detail="No build for this chat.")
     _JOBS.setdefault(row.job_id, {"name": row.job_id, "html": row.html, "ts": time.time()})
     return {"job_id": row.job_id, "html": row.html}
+
+
+def _load_job_html(job_id: str, db: Session) -> dict:
+    job = _JOBS.get(job_id)
+    if job:
+        return job
+    row = db.query(models.BuildSite).filter_by(job_id=job_id).first()
+    if row:
+        return {"name": row.job_id, "html": row.html, "ts": time.time()}
+    raise HTTPException(status_code=404, detail="Build not found.")
+
+
+class BuildEdit(BaseModel):
+    job_id: str
+    instruction: str
+
+
+_EDIT_SYS = (
+    "You are a senior front-end developer editing a single-file HTML site "
+    "(inline CSS/JS). Apply ONLY the requested change, keeping everything else — "
+    "structure, styles, scripts, content not mentioned — exactly as it was. "
+    "Rules: output the COMPLETE edited HTML file, no markdown fences, no "
+    "explanations; never leave placeholders/TODOs; keep it working and "
+    "responsive; content must stay visible without JavaScript."
+)
+
+
+@router.post("/edit")
+async def build_edit(req: BuildEdit, db: Session = Depends(get_db)):
+    """Chat-style edit of the current build: "change the hero to green"."""
+    job = _load_job_html(req.job_id, db)
+    instruction = req.instruction.strip()
+    if not instruction:
+        raise HTTPException(status_code=400, detail="No instruction given.")
+    out = await _llm_html([
+        {"role": "system", "content": _EDIT_SYS},
+        {"role": "user", "content": (
+            f"CHANGE REQUEST: {instruction}\n\nCURRENT HTML:\n{job['html']}")},
+    ], "openai/gpt-oss-120b", 14000, "medium")
+    html = _clean(out)
+    if "</html>" not in html.lower():
+        raise HTTPException(status_code=502,
+                            detail="Edit came back incomplete — try a shorter instruction.")
+    _JOBS[req.job_id] = {"name": job.get("name", req.job_id), "html": html, "ts": time.time()}
+    try:
+        row = db.query(models.BuildSite).filter_by(job_id=req.job_id).first()
+        if row:
+            row.html = html
+            db.commit()
+    except Exception:
+        try:
+            db.rollback()
+        except Exception:
+            pass
+    # keep any published copy in sync so edits show on the live URL
+    try:
+        pub = db.query(models.PublishedSite).filter_by(job_id=req.job_id).first()
+        if pub:
+            pub.html = html
+            db.commit()
+    except Exception:
+        try:
+            db.rollback()
+        except Exception:
+            pass
+    return {"job_id": req.job_id, "html": html}
+
+
+class BuildPublish(BaseModel):
+    job_id: str
+    user_id: str = "master-001"
+
+
+@router.post("/publish")
+def build_publish(req: BuildPublish, db: Session = Depends(get_db)):
+    """Make the built site live at /site/{slug}. Re-publish updates in place."""
+    job = _load_job_html(req.job_id, db)
+    name = re.sub(r"[^a-z0-9]+", "-", str(job.get("name", "site")).lower()).strip("-") or "site"
+    pub = db.query(models.PublishedSite).filter_by(job_id=req.job_id).first()
+    if not pub:
+        slug = f"{name}-{req.job_id[:6]}"
+        pub = models.PublishedSite(job_id=req.job_id, slug=slug,
+                                   name=str(job.get("name", name))[:80], html=job["html"])
+        db.add(pub)
+    else:
+        pub.html = job["html"]
+    db.commit()
+    return {"slug": pub.slug, "name": pub.name,
+            "url": f"/build/site/{pub.slug}", "updated": pub.updated_at or pub.created_at}
+
+
+@router.get("/published/{job_id}")
+def build_published(job_id: str, db: Session = Depends(get_db)):
+    pub = db.query(models.PublishedSite).filter_by(job_id=job_id).first()
+    if not pub:
+        raise HTTPException(status_code=404, detail="Not published yet.")
+    return {"slug": pub.slug, "name": pub.name, "url": f"/build/site/{pub.slug}"}
+
+
+# Live hosting for published sites — single-file HTML, served straight.
+@router.get("/site/{slug}", include_in_schema=False)
+def serve_published(slug: str, db: Session = Depends(get_db)):
+    pub = db.query(models.PublishedSite).filter_by(slug=slug).first()
+    if not pub:
+        raise HTTPException(status_code=404, detail="Site not found.")
+    from fastapi.responses import HTMLResponse
+    return HTMLResponse(pub.html)
 
 
 @router.get("/zip/{job_id}")

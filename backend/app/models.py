@@ -136,6 +136,19 @@ class Goal(Base):    # Phase 6: goal tracking — dashboard, progress, milestone
     user = relationship("User")
 
 
+class PublishedSite(Base):
+    # A Build & Run site the user published: served live at /site/{slug}.
+    # Re-publishing the same job updates the same slug.
+    __tablename__ = "published_sites"
+    id = Column(String, primary_key=True, default=uid)
+    job_id = Column(String, nullable=False, index=True)
+    slug = Column(String, unique=True, nullable=False, index=True)
+    name = Column(String, nullable=False)
+    html = Column(Text, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
 class ScheduledMsg(Base):
     # Scheduled AI messages: user prompt delivered as a chat reply at run_at.
     __tablename__ = "scheduled_msgs"
