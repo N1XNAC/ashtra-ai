@@ -260,7 +260,7 @@ async def chat(req: schemas.ChatRequest, request: Request, db: Session = Depends
         return {
             "conversation_id": conv.id,
             "reply": reply,
-            "sources": [schemas.MemoryHit(**h) for h in relevant],
+            "sources": [schemas.MemoryHit(**h).model_dump() for h in relevant],
             "adaptation": personality_adapter.summary_for_api(profile),
             "adaptations_made": adaptations_made,
             "tool_calls": tool_calls,
@@ -305,8 +305,15 @@ async def chat(req: schemas.ChatRequest, request: Request, db: Session = Depends
                     pass
                 payload = {"conversation_id": conv.id, "reply": reply, "sources": [],
                            "adaptation": {}, "adaptations_made": [], "tool_calls": [], "saved": []}
-            yield "data: " + json.dumps(
-                {"type": "done", "payload": payload}, ensure_ascii=False) + "\n\n"
+            try:
+                done_event = "data: " + json.dumps(
+                    {"type": "done", "payload": payload}, ensure_ascii=False, default=str) + "\n\n"
+            except Exception as e:
+                log.warning("[ASHRA API] done serialize failed: %s", type(e).__name__)
+                done_event = "data: " + json.dumps(
+                    {"type": "done", "payload": {"conversation_id": conv.id, "reply": reply}},
+                    ensure_ascii=False) + "\n\n"
+            yield done_event
 
         return StreamingResponse(
             _events(), media_type="text/event-stream",
