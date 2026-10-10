@@ -1,6 +1,8 @@
 from contextlib import asynccontextmanager
 from datetime import datetime
 
+import logging
+
 from fastapi import FastAPI
 from sqlalchemy import text
 from fastapi.middleware.cors import CORSMiddleware
@@ -11,6 +13,14 @@ from .config import settings
 from .security import (
     GlobalRateLimitMiddleware, ApiKeyMiddleware, SecurityHeadersMiddleware)
 from .services.ai_core import active_provider
+
+# Surface app INFO logs (e.g. [PERF /chat] stage timings) — uvicorn only
+# configures its own loggers by default.
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)s %(name)s %(message)s",
+    datefmt="%H:%M:%S",
+)
 
 try:
     Base.metadata.create_all(bind=engine)

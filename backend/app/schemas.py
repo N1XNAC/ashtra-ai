@@ -11,6 +11,9 @@ class ChatRequest(BaseModel):
     image_context: Optional[str] = None
     # Complex thinking toggle: force high reasoning effort (slower, smarter).
     deep_thinking: bool = False
+    # Opt-in SSE streaming: deltas as they're generated, full ChatResponse as
+    # the final event. Default False keeps old clients on the JSON path.
+    stream: bool = False
 
     @field_validator("user_id")
     @classmethod

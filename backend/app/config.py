@@ -47,6 +47,8 @@ class Settings(BaseSettings):
     chat_rate_limit_per_minute: int = 20  # POST /chat, per user_id (LLM spend)
     max_message_length: int = 4000      # hard cap on chat input chars
     docs_enabled: bool = True           # set DOCS_ENABLED=0 to hide /docs + /openapi.json
+    # Perf: one stage-timing log line per POST /chat (db, prep, llm, post, total).
+    chat_perf_log: bool = True
     # Phase 5: local custom model. Chain is OpenAI â local checkpoint â echo.
     # Set LOCAL_MODEL_ENABLED=0 to skip local inference.
     local_model_enabled: bool = True

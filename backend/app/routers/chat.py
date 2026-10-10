@@ -7,12 +7,39 @@ from ..security import check_rate, client_ip
 from ..services import ai_core, memory_engine, behavior_analyzer, personality_adapter, planner, knowledge_graph, web_images
 from ..services import agent as agent_exec
 from ..services.tools import due_reminders
+import asyncio
+import json
 import logging
 import re
+import time
+
+from fastapi.responses import StreamingResponse
 
 log = logging.getLogger("ashtra.api")
 
 router = APIRouter(prefix="/chat", tags=["chat"])
+
+# Lightweight per-request stage timing (production-safe: one log line per chat).
+_PERF = settings.chat_perf_log
+
+
+class _Stage:
+    """context manager: accumulate named stage durations for one request."""
+    def __init__(self) -> None:
+        self.marks: dict[str, float] = {}
+        self._t0 = time.perf_counter()
+        self._last = self._t0
+
+    def mark(self, name: str) -> None:
+        now = time.perf_counter()
+        self.marks[name] = self.marks.get(name, 0.0) + (now - self._last)
+        self._last = now
+
+    def total(self) -> float:
+        return time.perf_counter() - self._t0
+
+    def report(self) -> str:
+        return " ".join(f"{k}={v * 1000:.0f}ms" for k, v in self.marks.items())
 
 _TITLE_SYS = ("Generate a short title (max 6 words) for this conversation. "
               "Reply with the title only — no quotes, no punctuation at the end.")
@@ -23,19 +50,20 @@ async def _auto_title(message: str) -> str:
     fallback = re.sub(r"\s+", " ", message.strip())[:40].strip()
     try:
         import httpx
-        async with httpx.AsyncClient(timeout=15) as c:
-            r = await c.post(
-                f"{settings.groq_base_url.rstrip('/')}/chat/completions",
-                headers={"Authorization": f"Bearer {settings.groq_api_key}"},
-                json={"model": settings.groq_model,
-                      "messages": [{"role": "system", "content": _TITLE_SYS},
-                                   {"role": "user", "content": message[:500]}],
-                      "max_tokens": 24, "temperature": 0.2,
-                      "reasoning_effort": "low"},
-            )
-            r.raise_for_status()
-            t = (r.json()["choices"][0]["message"]["content"] or "").strip().strip('"')
-            return (t[:60] or fallback) if t else fallback
+        from ..services.ai_core import _http
+        r = await _http().post(
+            f"{settings.groq_base_url.rstrip('/')}/chat/completions",
+            headers={"Authorization": f"Bearer {settings.groq_api_key}"},
+            json={"model": settings.groq_model,
+                  "messages": [{"role": "system", "content": _TITLE_SYS},
+                               {"role": "user", "content": message[:500]}],
+                  "max_tokens": 24, "temperature": 0.2,
+                  "reasoning_effort": "low"},
+            timeout=15,
+        )
+        r.raise_for_status()
+        t = (r.json()["choices"][0]["message"]["content"] or "").strip().strip('"')
+        return (t[:60] or fallback) if t else fallback
     except Exception:
         return fallback
 
@@ -64,6 +92,7 @@ def _apply_profile_hints(profile, hints: dict):
 
 @router.post("", response_model=schemas.ChatResponse)
 async def chat(req: schemas.ChatRequest, request: Request, db: Session = Depends(get_db)):
+    t = _Stage()
     log.info("[ASHRA API] request received user=%s len=%d", req.user_id, len(req.message or ""))
     # Per-user LLM spend cap (stricter than the global per-IP limit).
     check_rate(f"chat:{client_ip(request)}:{req.user_id}", settings.chat_rate_limit_per_minute)
@@ -77,6 +106,7 @@ async def chat(req: schemas.ChatRequest, request: Request, db: Session = Depends
         profile = models.UserProfile(user_id=user.id)
         db.add(profile)
         db.commit()
+    t.mark("db_user")
 
     conv = None
     new_conv = False
@@ -90,6 +120,7 @@ async def chat(req: schemas.ChatRequest, request: Request, db: Session = Depends
 
     db.add(models.Message(conversation_id=conv.id, role="user", content=req.message))
     db.commit()
+    t.mark("db_conv")
 
     # --- Phase 2: conversation retrieval + semantic memory retrieval ---
     history_rows = (
@@ -100,6 +131,7 @@ async def chat(req: schemas.ChatRequest, request: Request, db: Session = Depends
 
     relevant = memory_engine.retrieve_relevant(user.id, req.message, top_k=3)
     memory_context = "\n".join(f"- [{h['kind']}] {h['content']}" for h in relevant if h.get("content"))
+    t.mark("db_history_mem")
 
     # --- Phase 4: planner → tools (non-critical: never block the reply) ---
     tool_calls, tool_context = [], ""
@@ -160,68 +192,134 @@ async def chat(req: schemas.ChatRequest, request: Request, db: Session = Depends
         ctx += f"\n{reminder_context}"
     if goal_context:
         ctx += f"\n{goal_context}"
+    t.mark("prep")  # planner + reminders + graph + goals + behaviour + prompt build
+
+    # Auto-title only needs the user message — run it ALONGSIDE generation
+    # instead of adding a second full LLM round-trip to the response path.
+    title_task = asyncio.create_task(_auto_title(req.message)) if new_conv else None
+
+    async def _finalize(reply: str) -> dict:
+        """Post-generation work shared by the JSON and streaming paths."""
+        if not (reply or "").strip():
+            log.warning("[ASHRA API] empty reply, using fallback")
+            reply = "Sorry, I couldn't generate a response. Please try again."
+        if tool_calls:
+            reply = reply.rstrip() + " 🔧[" + ", ".join(c["tool"] for c in tool_calls) + "]"
+        # --- Web images: "what does a banana look like" → inline photos ---
+        # Network call — keep it off the event loop so it can't stall others.
+        _imgs: list = []
+        try:
+            _img_q = web_images.wants_images(req.message)
+            if _img_q:
+                _imgs = await asyncio.to_thread(web_images.search, _img_q)
+        except Exception as e:
+            log.warning("[ASHRA API] web images failed: %s", type(e).__name__)
+        if _imgs:
+            reply = reply.rstrip() + "\n\n" + "\n".join(
+                f"![{i['title']}]({i['thumb']})" for i in _imgs)
+        t.mark("web_images")
+
+        db.add(models.Message(conversation_id=conv.id, role="assistant", content=reply))
+
+        # --- Phase 2+3: extract → score → store (SQL + Qdrant), incl. behaviour patterns ---
+        cands = memory_engine.extract_candidate_memories(req.message)
+        beh = behavior_analyzer.behaviour_memory_candidate(req.message, signals)
+        if beh:
+            cands.append(beh)
+        saved: list[str] = []
+        for cand in cands:
+            exists = db.query(models.Memory).filter_by(
+                user_id=user.id, content=cand["content"], is_active=True).first()
+            if exists:
+                continue
+            mem = models.Memory(user_id=user.id, **cand)
+            db.add(mem)
+            db.commit()
+            db.refresh(mem)
+            saved.append(mem.content)
+            memory_engine.index_memory(mem.id, user.id, mem.content, mem.kind, mem.memory_type, mem.importance)
+
+        hints = _keyword_profile_hints(req.message)
+        if hints:
+            _apply_profile_hints(profile, hints)
+            db.commit()
+
+        db.commit()
+        db.refresh(profile)
+        t.mark("db_post")
+        # Title task started before generation — by now it's usually done.
+        if title_task is not None:
+            try:
+                conv.title = await title_task
+                db.commit()
+            except Exception:
+                log.warning("[ASHRA API] auto-title failed", exc_info=True)
+        t.mark("auto_title")
+        if _PERF:
+            log.info("[PERF /chat] %s total=%.0fms", t.report(), t.total() * 1000)
+        return {
+            "conversation_id": conv.id,
+            "reply": reply,
+            "sources": [schemas.MemoryHit(**h) for h in relevant],
+            "adaptation": personality_adapter.summary_for_api(profile),
+            "adaptations_made": adaptations_made,
+            "tool_calls": tool_calls,
+            "saved": saved[:3],
+        }
+
+    # --- Streaming path: first token goes out immediately, post-work after ---
+    if req.stream:
+        async def _events():
+            parts: list[str] = []
+            first = True
+            try:
+                async for chunk in ai_core.generate_reply_stream(
+                        req.message, ctx, history, memory_context, adaptation_text,
+                        deep_thinking=bool(getattr(req, "deep_thinking", False))):
+                    if first:
+                        t.mark("llm_ttft")  # time to first visible token
+                        first = False
+                    parts.append(chunk)
+                    yield "data: " + json.dumps(
+                        {"type": "delta", "text": chunk}, ensure_ascii=False) + "\n\n"
+            except Exception as e:
+                log.warning("[ASHRA API] stream failed after %d chunks: %s",
+                            len(parts), type(e).__name__)
+                if not parts:
+                    if title_task is not None and not title_task.done():
+                        title_task.cancel()
+                    yield "data: " + json.dumps(
+                        {"type": "error", "detail": str(e) or "generation failed"}) + "\n\n"
+                    return
+                # partial text already on screen — save it rather than strand the user
+            t.mark("llm")
+            reply = "".join(parts)
+            try:
+                payload = await _finalize(reply)
+            except Exception as e:
+                # Client already has the text — never strand it on a post-work error.
+                log.warning("[ASHRA API] finalize failed: %s", type(e).__name__)
+                try:
+                    db.rollback()
+                except Exception:
+                    pass
+                payload = {"conversation_id": conv.id, "reply": reply, "sources": [],
+                           "adaptation": {}, "adaptations_made": [], "tool_calls": [], "saved": []}
+            yield "data: " + json.dumps(
+                {"type": "done", "payload": payload}, ensure_ascii=False) + "\n\n"
+
+        return StreamingResponse(
+            _events(), media_type="text/event-stream",
+            headers={"Cache-Control": "no-cache", "Connection": "keep-alive",
+                     # don't let proxies buffer the stream (Render/CF/nginx)
+                     "X-Accel-Buffering": "no"})
+
+    # --- JSON path (original contract) ---
     reply = await ai_core.generate_reply(req.message, ctx, history, memory_context, adaptation_text,
                                            deep_thinking=bool(getattr(req, "deep_thinking", False)))
+    t.mark("llm")
     log.info("[ASHRA API] generation completed user=%s reply_len=%d", user.id, len(reply or ""))
-    if not (reply or "").strip():
-        log.warning("[ASHRA API] empty reply, using fallback")
-        reply = "Sorry, I couldn't generate a response. Please try again."
-    if tool_calls:
-        reply = reply.rstrip() + " 🔧[" + ", ".join(c["tool"] for c in tool_calls) + "]"
-    # --- Web images: "what does a banana look like" → inline photos ---
-    _imgs: list = []
-    try:
-        _img_q = web_images.wants_images(req.message)
-        _imgs = web_images.search(_img_q) if _img_q else []
-    except Exception as e:
-        log.warning("[ASHRA API] web images failed: %s", type(e).__name__)
-    if _imgs:
-        reply = reply.rstrip() + "\n\n" + "\n".join(
-            f"![{i['title']}]({i['thumb']})" for i in _imgs)
-
-    db.add(models.Message(conversation_id=conv.id, role="assistant", content=reply))
-
-    # --- Phase 2+3: extract → score → store (SQL + Qdrant), incl. behaviour patterns ---
-    cands = memory_engine.extract_candidate_memories(req.message)
-    beh = behavior_analyzer.behaviour_memory_candidate(req.message, signals)
-    if beh:
-        cands.append(beh)
-    saved: list[str] = []
-    for cand in cands:
-        exists = db.query(models.Memory).filter_by(
-            user_id=user.id, content=cand["content"], is_active=True).first()
-        if exists:
-            continue
-        mem = models.Memory(user_id=user.id, **cand)
-        db.add(mem)
-        db.commit()
-        db.refresh(mem)
-        saved.append(mem.content)
-        memory_engine.index_memory(mem.id, user.id, mem.content, mem.kind, mem.memory_type, mem.importance)
-
-    hints = _keyword_profile_hints(req.message)
-    if hints:
-        _apply_profile_hints(profile, hints)
-        db.commit()
-
-    db.commit()
-    db.refresh(profile)
-    # Auto-title new conversations with something useful for the sidebar.
-    if new_conv:
-        try:
-            conv.title = await _auto_title(req.message)
-            db.commit()
-        except Exception:
-            log.warning("[ASHRA API] auto-title failed", exc_info=True)
-    return {
-        "conversation_id": conv.id,
-        "reply": reply,
-        "sources": [schemas.MemoryHit(**h) for h in relevant],
-        "adaptation": personality_adapter.summary_for_api(profile),
-        "adaptations_made": adaptations_made,
-        "tool_calls": tool_calls,
-        "saved": saved[:3],
-    }
+    return await _finalize(reply)
 
 
 # --- Sidebar: conversation history (ChatGPT-style UI) ---

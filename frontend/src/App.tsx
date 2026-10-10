@@ -51,6 +51,44 @@ async function apiForm(path: string, form: FormData) {
 const post = (path: string, body: unknown) =>
   api(path, { method: 'POST', body: JSON.stringify(body) })
 
+/* SSE chat: reads delta/done/error events; returns the final ChatResponse payload.
+   onDelta gets the accumulated text so far (caller throttles flushes). */
+type ChatPayload = {
+  conversation_id?: string; reply?: string
+  sources?: unknown[]; tool_calls?: { tool: string }[]
+  adaptations_made?: string[]; saved?: string[]
+}
+async function readChatStream(r: Response, onDelta: (acc: string) => void): Promise<ChatPayload> {
+  const reader = r.body!.getReader()
+  const dec = new TextDecoder()
+  let buf = ''
+  let acc = ''
+  let done: ChatPayload | null = null
+  for (;;) {
+    const { done: fin, value } = await reader.read()
+    if (fin) break
+    buf += dec.decode(value, { stream: true })
+    let i: number
+    while ((i = buf.indexOf('\n\n')) >= 0) {
+      const block = buf.slice(0, i); buf = buf.slice(i + 2)
+      for (const line of block.split('\n')) {
+        if (!line.startsWith('data:')) continue
+        let ev: { type?: string; text?: string; payload?: ChatPayload; detail?: string }
+        try { ev = JSON.parse(line.slice(5).trim()) } catch { continue }
+        if (ev.type === 'delta') { acc += ev.text || ''; onDelta(acc) }
+        else if (ev.type === 'done') done = ev.payload ?? null
+        else if (ev.type === 'error') {
+          if (acc) return { reply: acc } /* keep the text already on screen */
+          throw new ApiError(0, ev.detail || 'Stream failed.', null)
+        }
+      }
+    }
+  }
+  if (done) return done
+  if (acc) return { reply: acc } // connection cut mid-text — keep what arrived
+  throw new ApiError(0, 'Backend sent an empty response.', null)
+}
+
 /* ---------- minimal stroke icons (ChatGPT-style, no emoji) ---------- */
 const PATHS: Record<string, ReactNode> = {
   pen: (<><path d="M12 20h9" /><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z" /></>),
@@ -103,7 +141,10 @@ function inline(s: string) {
   h = h.replace(/\[([^\]]+)\]\((https?:[^)]+)\)/g, '<a href="$2" target="_blank" rel="noreferrer">$1</a>')
   return h
 }
+const MD_CACHE = new Map<string, string>()
 function renderMd(src: string) {
+  const hit = MD_CACHE.get(src)
+  if (hit !== undefined) return hit
   const lines = src.split('\n')
   let html = '', inFence = false, inList: string | null = null
   const closeList = () => { if (inList) { html += `</${inList}>`; inList = null } }
@@ -130,6 +171,8 @@ function renderMd(src: string) {
   }
   closeList()
   if (inFence) html += '</code></pre>'
+  if (MD_CACHE.size > 500) MD_CACHE.clear()
+  MD_CACHE.set(src, html)
   return html
 }
 
@@ -217,7 +260,8 @@ function ThreadShell({ msgs, busy, status, empty, composer, footer, actionIndex,
   actionIndex?: number | null; action?: ReactNode
 }) {
   const bottomRef = useRef<HTMLDivElement>(null)
-  useEffect(() => { bottomRef.current?.scrollIntoView({ behavior: 'smooth' }) }, [msgs, busy])
+  /* instant while streaming (smooth would queue up and jank), smooth otherwise */
+  useEffect(() => { bottomRef.current?.scrollIntoView({ behavior: busy ? 'auto' : 'smooth' }) }, [msgs, busy])
   return (
     <>
       <div className="thread">
@@ -389,15 +433,39 @@ function Chat({ convId, sessKey, sess, patchSess, onNewConv, refreshSidebar, onD
     }
     try {
       console.log('[ASHRA] sending message')
-      const j = await post('/chat', { user_id: USER, conversation_id: convId, message: content, image_context, deep_thinking: deep })
+      /* Stream first: deltas render as they arrive (TTFT ≈ first token), and the
+         done event carries the same ChatResponse payload as the JSON path.
+         A non-SSE answer (older backend) falls back to plain JSON. */
+      const payload = { user_id: USER, conversation_id: convId, message: content, image_context, deep_thinking: deep }
+      const sh: Record<string, string> = { 'Content-Type': 'application/json' }
+      if (API_KEY) sh['X-API-Key'] = API_KEY
+      const r = await fetch(API + '/chat', {
+        method: 'POST', headers: sh,
+        body: JSON.stringify({ ...payload, stream: true }),
+        signal: AbortSignal.timeout(120000),
+      })
+      if (!r.ok) await throwFor(r)
+      let j: ChatPayload
+      if ((r.headers.get('content-type') || '').includes('text/event-stream') && r.body) {
+        let last = 0
+        j = await readChatStream(r, acc => {
+          const now = performance.now()
+          if (now - last < 60) return /* batch flushes so React re-renders stay cheap */
+          last = now
+          patchSess(key, { msgs: [...base, userMsg, { role: 'assistant', content: acc, fresh: true }], busyLabel: '' })
+        })
+      } else {
+        j = await r.json()
+      }
       console.log('[ASHRA] response parsed')
       if (!j || typeof j.reply !== 'string' || !j.reply.trim()) {
         console.log('[ASHRA ERROR] invalid response shape', JSON.stringify(j)?.slice(0, 200))
         throw new Error('Invalid response from backend (missing reply).')
       }
       console.log('[ASHRA] rendering response')
-      const targetKey = !convId ? j.conversation_id : key
-      if (!convId) { onNewConv(j.conversation_id); refreshSidebar() }
+      const jConv = typeof j.conversation_id === 'string' ? j.conversation_id : ''
+      const targetKey = !convId && jConv ? jConv : key
+      if (!convId && jConv) { onNewConv(jConv); refreshSidebar() }
       const meta: string[] = []
       if (sawImage) meta.push('saw image')
       if (j.sources?.length) meta.push(`recalled ${j.sources.length}`)
@@ -1148,16 +1216,23 @@ export default function App() {
       return out
     } catch { return {} }
   })
+  /* Debounced: streaming + multi-patch turns used to re-serialize every session
+     on each state change. Write once things settle (and on tab close). */
   useEffect(() => {
-    try {
-      const keys = Object.keys(sessions).filter(k => k !== '__draft' && k !== 'new').slice(-15)
-      const slim: Record<string, { msgs: Msg[] }> = {}
-      for (const k of keys) {
-        const m = sessions[k]?.msgs
-        if (m && m.length) slim[k] = { msgs: m.slice(-100).map(({ role, content, meta }) => ({ role, content, meta })) }
-      }
-      localStorage.setItem('ashtra-sessions-v1', JSON.stringify(slim))
-    } catch { /* quota — skip */ }
+    const save = () => {
+      try {
+        const keys = Object.keys(sessions).filter(k => k !== '__draft' && k !== 'new').slice(-15)
+        const slim: Record<string, { msgs: Msg[] }> = {}
+        for (const k of keys) {
+          const m = sessions[k]?.msgs
+          if (m && m.length) slim[k] = { msgs: m.slice(-100).map(({ role, content, meta }) => ({ role, content, meta })) }
+        }
+        localStorage.setItem('ashtra-sessions-v1', JSON.stringify(slim))
+      } catch { /* quota — skip */ }
+    }
+    const t = window.setTimeout(save, 700)
+    window.addEventListener('pagehide', save)
+    return () => { window.clearTimeout(t); window.removeEventListener('pagehide', save) }
   }, [sessions])
   function patchSess(key: string, p: Partial<Sess>) {
     setSessions(s => ({ ...s, [key]: { ...(s[key] ?? blankSess()), ...p } }))
@@ -1185,6 +1260,17 @@ export default function App() {
       ...c.filter(x => x.id !== '__draft')])
   }
   useEffect(() => { refreshConvs() }, [])
+  /* Keep the Render free instance warm while the tab is open — a cold start
+     costs the first request ~42s of spin-up. */
+  useEffect(() => {
+    let alive = true
+    const ping = () => {
+      if (!alive) return
+      fetch(API + '/health', { cache: 'no-store' }).catch(() => { /* cold or offline */ })
+    }
+    const iv = window.setInterval(ping, 10 * 60 * 1000)
+    return () => { alive = false; window.clearInterval(iv) }
+  }, [])
 
   async function delConv(id: string) {
     await api(`/chat/conversations/${USER}/${id}`, { method: 'DELETE' })
