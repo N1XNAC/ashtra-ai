@@ -31,16 +31,15 @@ QUIZ_SYS = (
 )
 
 VISUALS_SYS = (
-    "Teach this topic with a structured visual: FIRST write exactly 1-2 "
-    "sentences of intro text, THEN output ONLY a ```json fence with this "
-    "exact shape (nothing after it):\n"
+    "Reply with ONLY two things, in this order: 1-2 intro sentences, then a "
+    "```json fence with EXACTLY this shape and nothing after it:\n"
     '{"title": "<short title>", "flow": true, '
     '"items": [{"icon": "<one emoji>", "label": "<3-6 words>", '
     '"text": "<one clear sentence>"}, ...]}\n'
     "Rules: 3 to 5 items that tell the story in order (flow true) or the "
     "key parts (flow false); each label short, each text one sentence a "
-    "student gets instantly; pick a fitting emoji per item. Answering with "
-    "prose alone is a failure — the JSON fence is mandatory."
+    "student gets instantly; a fitting emoji per item. The fenced JSON is "
+    "mandatory — a prose-only answer is a failure."
 )
 
 SVG_RETRY_SYS = (
@@ -86,6 +85,29 @@ def extract_cards(reply: str) -> tuple[str, dict]:
     return body, {"title": str(cards.get("title") or "")[:100],
                   "flow": bool(cards.get("flow", True)),
                   "items": clean_items}
+
+
+_CARD_ICONS = ["💡", "📌", "🔬", "🌍", "⚙️", "🧠"]
+
+
+def cards_from_prose(reply: str, topic: str) -> dict:
+    """Deterministic last resort: turn a prose answer into cards so /visuals
+    never comes back empty. Splits long sentences; first words become labels."""
+    text = re.sub(r"```[\s\S]*?```", " ", reply or "")
+    text = re.sub(r"\s+", " ", text).strip()
+    sentences = [s.strip() for s in re.split(r"(?<=[.!?])\s+", text)
+                 if len(s.strip()) > 30]
+    items = []
+    for i, s in enumerate(sentences[:5]):
+        words = s.split()
+        label = " ".join(words[:6]).rstrip(",;:")[:60]
+        items.append({"icon": _CARD_ICONS[i % len(_CARD_ICONS)],
+                      "label": label or (topic or "Key point")[:60],
+                      "text": s[:220]})
+    if len(items) < 2:
+        return {}
+    title = (topic or "Overview").strip()[:100]
+    return {"title": title, "flow": False, "items": items}
 
 
 def extract_svg(reply: str) -> tuple[str, str]:

@@ -102,7 +102,7 @@ type ChatPayload = {
   study?: { visual?: { title: string; thumb: string }[]; visual_svg?: string; visual_cards?: VCards; actions?: string[]; visual_available?: boolean; expect?: string }
 }
 async function readChatStream(r: Response, onDelta: (acc: string) => void,
-  onEvent?: (ev: { type?: string; images?: { title: string; thumb: string }[]; svg?: string; cards?: VCards }) => void): Promise<ChatPayload> {
+  onEvent?: (ev: { type?: string; images?: { title: string; thumb: string }[]; svg?: string; cards?: VCards; markdown?: string }) => void): Promise<ChatPayload> {
   const reader = r.body!.getReader()
   const dec = new TextDecoder()
   let buf = ''
@@ -124,6 +124,7 @@ async function readChatStream(r: Response, onDelta: (acc: string) => void,
         else if (ev.type === 'visual') { try { onEvent?.(ev) } catch { /* ignore */ } }
         else if (ev.type === 'visual_svg') { try { onEvent?.(ev) } catch { /* ignore */ } }
         else if (ev.type === 'visual_cards') { try { onEvent?.(ev) } catch { /* ignore */ } }
+        else if (ev.type === 'images') { try { onEvent?.(ev) } catch { /* ignore */ } }
         else if (ev.type === 'error') {
           if (acc) return { reply: acc } /* keep the text already on screen */
           throw new ApiError(0, ev.detail || 'Stream failed.', null)
@@ -658,6 +659,7 @@ function Chat({ convId, sessKey, sess, patchSess, onNewConv, refreshSidebar, onD
       let studyVisual: { title: string; thumb: string }[] | null = null
       let studySvg: string | null = null
       let studyCards: VCards | null = null
+      let lateImagesMd = ''
       if ((r.headers.get('content-type') || '').includes('text/event-stream') && r.body) {
         let last = 0
         j = await readChatStream(r, acc => {
@@ -665,7 +667,7 @@ function Chat({ convId, sessKey, sess, patchSess, onNewConv, refreshSidebar, onD
           if (now - last < 60) return /* batch flushes so React re-renders stay cheap */
           last = now
           patchSess(key, { msgs: [...base, userMsg, { role: 'assistant', content: acc, fresh: true }], busyLabel: '' })
-        }, ev => { if (ev.type === 'visual' && Array.isArray(ev.images)) studyVisual = ev.images; if (ev.type === 'visual_svg' && typeof ev.svg === 'string') studySvg = ev.svg; if (ev.type === 'visual_cards' && ev.cards && typeof ev.cards === 'object') studyCards = ev.cards as VCards })
+        }, ev => { if (ev.type === 'visual' && Array.isArray(ev.images)) studyVisual = ev.images; if (ev.type === 'visual_svg' && typeof ev.svg === 'string') studySvg = ev.svg; if (ev.type === 'visual_cards' && ev.cards && typeof ev.cards === 'object') studyCards = ev.cards as VCards; if (ev.type === 'images' && typeof ev.markdown === 'string') lateImagesMd += ev.markdown })
       } else {
         j = await r.json()
       }
@@ -679,13 +681,14 @@ function Chat({ convId, sessKey, sess, patchSess, onNewConv, refreshSidebar, onD
       const targetKey = !convId && jConv ? jConv : key
       if (!convId && jConv) { onNewConv(jConv); refreshSidebar() }
       const meta: string[] = []
+      const fullReply = (j.reply || '') + lateImagesMd
       if (sawImage) meta.push('saw image')
       if (j.sources?.length) meta.push(`recalled ${j.sources.length}`)
       if (j.tool_calls?.length) meta.push('used ' + j.tool_calls.map((c: { tool: string }) => c.tool).join(', '))
-      if (/\!\[[^\]]*\]\(https?:/.test(j.reply)) meta.push('images')
+      if (/\!\[[^\]]*\]\(https?:/.test(fullReply)) meta.push('images')
       if (j.adaptations_made?.length) meta.push('adapted')
       patchSess(targetKey, {
-        msgs: [...base, userMsg, { role: 'assistant', content: j.reply, meta: meta.join(' · ') || undefined, fresh: true, saved: Array.isArray(j.saved) && j.saved.length ? j.saved : undefined, study: (() => {
+        msgs: [...base, userMsg, { role: 'assistant', content: fullReply, meta: meta.join(' · ') || undefined, fresh: true, saved: Array.isArray(j.saved) && j.saved.length ? j.saved : undefined, study: (() => {
           const st: NonNullable<Msg['study']> = {}
           if (studyVisual) st.visual = studyVisual
           else if (j.study?.visual?.length) st.visual = j.study.visual

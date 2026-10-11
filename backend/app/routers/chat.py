@@ -264,6 +264,17 @@ async def chat(req: schemas.ChatRequest, request: Request, db: Session = Depends
     title_task = asyncio.create_task(_auto_title(req.message)) if new_conv else None
     # Visual gate runs ALONGSIDE generation so it's usually decided by done-time.
     visual_task = asyncio.create_task(study.visual_needed(req.message)) if study_mode else None
+    # Web images for the stream path also start ALONGSIDE generation; results
+    # are harvested with zero awaits (task.done() is sync) so nothing can
+    # strand the client between the last token and done.
+    _img_task = None
+    if not study_family:
+        try:
+            _img_q0 = web_images.wants_images(gen_text)
+        except Exception:
+            _img_q0 = ""
+        if _img_q0:
+            _img_task = asyncio.create_task(asyncio.to_thread(web_images.search, _img_q0))
 
     async def _finalize(reply: str) -> dict:
         """Post-generation work shared by the JSON and streaming paths."""
@@ -313,6 +324,17 @@ async def chat(req: schemas.ChatRequest, request: Request, db: Session = Depends
                     svg = ""
                 if svg:
                     study_blocks["visual_svg"] = svg
+            if not cards and not study_blocks.get("visual_svg"):
+                # Deterministic fallback: build cards from the prose itself.
+                try:
+                    cards = study.cards_from_prose(reply, slash_topic or slash_arg)
+                    if cards:
+                        log.info("[ASHRA API] study cards synthesized from prose (%d items)",
+                                 len(cards["items"]))
+                except Exception as e:
+                    log.warning("[ASHRA API] study cards synthesize failed: %s",
+                                type(e).__name__)
+                    cards = {}
             if cards:
                 study_blocks["visual_cards"] = cards
         if study_family:
@@ -411,6 +433,11 @@ async def chat(req: schemas.ChatRequest, request: Request, db: Session = Depends
         }
 
     # --- Streaming path: first token goes out immediately, post-work after ---
+    # done is built with ZERO awaits after the last token (sync dict + dumps
+    # + yield only) — slow disks, gated LLM calls and flaky proxies can never
+    # strand the client mid-stream. Everything awaitable runs either
+    # ALONGSIDE generation (harvested via task.done(), no suspension) or
+    # AFTER done as fire-and-forget bookkeeping / follow-up events.
     if req.stream:
         async def _events():
             parts: list[str] = []
@@ -419,8 +446,6 @@ async def chat(req: schemas.ChatRequest, request: Request, db: Session = Depends
                 async for chunk in ai_core.generate_reply_stream(
                         gen_text, ctx, history, memory_context, adaptation_text,
                         deep_thinking=bool(getattr(req, "deep_thinking", False)),
-                        # Study replies need room (explainer + flashcards + quiz)
-                        # but little reasoning — keep the budget for content.
                         max_tokens=cmd_budget,
                         reasoning=cmd_reason):
                     if first:
@@ -433,25 +458,155 @@ async def chat(req: schemas.ChatRequest, request: Request, db: Session = Depends
                 log.warning("[ASHRA API] stream failed after %d chunks: %s",
                             len(parts), type(e).__name__)
                 if not parts:
-                    if title_task is not None and not title_task.done():
-                        title_task.cancel()
-                    if visual_task is not None and not visual_task.done():
-                        visual_task.cancel()
+                    for _tt in (title_task, visual_task, _img_task):
+                        try:
+                            if _tt is not None and not _tt.done():
+                                _tt.cancel()
+                        except Exception:
+                            pass
                     yield "data: " + json.dumps(
                         {"type": "error", "detail": str(e) or "generation failed"}) + "\n\n"
                     return
                 # partial text already on screen — save it rather than strand the user
             t.mark("llm")
             reply = "".join(parts)
+            if not (reply or "").strip():
+                log.warning("[ASHRA API] empty reply, using fallback")
+                reply = "Sorry, I couldn't generate a response. Please try again."
+            if tool_calls:
+                reply = reply.rstrip() + " 🔧[" + ", ".join(c["tool"] for c in tool_calls) + "]"
+            # Harvest concurrent image results WITHOUT awaiting.
+            _harvested_imgs: list = []
+            if _img_task is not None:
+                try:
+                    if _img_task.done() and not _img_task.cancelled():
+                        _harvested_imgs = _img_task.result() or []
+                except Exception:
+                    _harvested_imgs = []
+            if _harvested_imgs:
+                try:
+                    reply = reply.rstrip() + "\n\n" + "\n".join(
+                        f"![{i['title']}]({i['thumb']})" for i in _harvested_imgs)
+                except Exception:
+                    pass
+            if web_sources:
+                try:
+                    reply = reply.rstrip() + "\n\nSources:\n" + "\n".join(
+                        f"{s['n']}. [{s['title']}]({s['url']})" for s in web_sources[:5])
+                except Exception:
+                    pass
+            # Memory + notes + hints + assistant row: sync DB work, safe pre-done.
+            saved: list[str] = []
+            _to_index: list = []
+            study_blocks: dict = {}
             try:
-                payload = await _finalize(reply)
+                cands = memory_engine.extract_candidate_memories(gen_text)
+                beh = behavior_analyzer.behaviour_memory_candidate(gen_text, signals)
+                if beh:
+                    cands.append(beh)
+                for cand in cands:
+                    exists = db.query(models.Memory).filter_by(
+                        user_id=user.id, content=cand["content"], is_active=True).first()
+                    if exists:
+                        continue
+                    mem = models.Memory(user_id=user.id, **cand)
+                    db.add(mem)
+                    db.commit()
+                    db.refresh(mem)
+                    saved.append(mem.content)
+                    _to_index.append(mem)
+                hints = _keyword_profile_hints(gen_text)
+                if hints:
+                    _apply_profile_hints(profile, hints)
+                    db.commit()
             except Exception as e:
-                # Client already has the text — never strand it on a post-work error.
-                log.warning("[ASHRA API] finalize failed: %s", type(e).__name__)
+                log.warning("[ASHRA API] stream persist (pre-done) failed: %s", type(e).__name__)
                 try:
                     db.rollback()
                 except Exception:
                     pass
+            if study_family:
+                expect = "quiz" if slash_cmd == "quiz" else "flashcards"
+                study_blocks["expect"] = expect
+                try:
+                    _, fcs, _ = study.split_study(reply, expect=expect)
+                    added = 0
+                    for fc in fcs:
+                        content = f"Q: {fc['q']}\nA: {fc['a']}"
+                        exists = db.query(models.Note).filter_by(
+                            user_id=user.id, content=content).first()
+                        if exists:
+                            continue
+                        db.add(models.Note(user_id=user.id, title=f"Study: {fc['q']}"[:120],
+                                           content=content))
+                        added += 1
+                    if added:
+                        db.commit()
+                    if fcs:
+                        study_blocks["flashcards"] = fcs
+                except Exception as e:
+                    log.warning("[ASHRA API] study notes failed: %s", type(e).__name__)
+                    try:
+                        db.rollback()
+                    except Exception:
+                        pass
+                if slash_cmd == "study" and visual_task is not None:
+                    # Staged reveal: record the verdict only if already decided
+                    # (no awaiting — images fetch on /visuals tap).
+                    _va = False
+                    try:
+                        if visual_task.done() and not visual_task.cancelled():
+                            _va = bool(visual_task.result())
+                    except Exception:
+                        pass
+                    study_blocks["actions"] = (["flashcards", "quiz"]
+                                               + (["visuals"] if _va else []))
+                    study_blocks["visual_available"] = _va
+                if slash_cmd == "visuals":
+                    try:
+                        reply, _cards = study.extract_cards(reply)
+                        if _cards:
+                            study_blocks["visual_cards"] = _cards
+                        else:
+                            _, _svg = study.extract_svg(reply)
+                            if _svg:
+                                study_blocks["visual_svg"] = _svg
+                    except Exception as e:
+                        log.warning("[ASHRA API] study visual parse failed: %s",
+                                    type(e).__name__)
+            try:
+                db.add(models.Message(conversation_id=conv.id, role="assistant", content=reply))
+                db.commit()
+            except Exception:
+                try:
+                    db.rollback()
+                except Exception:
+                    pass
+            try:
+                db.refresh(profile)
+            except Exception:
+                pass
+            t.mark("db_post")
+            try:
+                _src = []
+                for h in relevant:
+                    try:
+                        _src.append(schemas.MemoryHit(**h).model_dump())
+                    except Exception:
+                        continue
+                payload = {
+                    "conversation_id": conv.id,
+                    "reply": reply,
+                    "sources": _src,
+                    "adaptation": personality_adapter.summary_for_api(profile),
+                    "adaptations_made": adaptations_made,
+                    "tool_calls": tool_calls,
+                    "saved": saved[:3],
+                    "study": study_blocks,
+                    "web_sources": web_sources,
+                }
+            except Exception as e:
+                log.warning("[ASHRA API] done payload failed: %s", type(e).__name__)
                 payload = {"conversation_id": conv.id, "reply": reply, "sources": [],
                            "adaptation": {}, "adaptations_made": [], "tool_calls": [], "saved": []}
             try:
@@ -462,21 +617,82 @@ async def chat(req: schemas.ChatRequest, request: Request, db: Session = Depends
                 done_event = "data: " + json.dumps(
                     {"type": "done", "payload": {"conversation_id": conv.id, "reply": reply}},
                     ensure_ascii=False) + "\n\n"
-            if isinstance(payload, dict):
-                _st = payload.get("study", {}) or {}
-                if _st.get("visual"):
-                    yield "data: " + json.dumps(
-                        {"type": "visual", "images": _st["visual"]},
-                        ensure_ascii=False) + "\n\n"
-                if _st.get("visual_svg"):
-                    yield "data: " + json.dumps(
-                        {"type": "visual_svg", "svg": _st["visual_svg"]},
-                        ensure_ascii=False) + "\n\n"
-                if _st.get("visual_cards"):
-                    yield "data: " + json.dumps(
-                        {"type": "visual_cards", "cards": _st["visual_cards"]},
-                        ensure_ascii=False) + "\n\n"
             yield done_event
+            # ---- client is complete; slow/awaitable bookkeeping after done ----
+            try:
+                for _m in _to_index:
+                    try:
+                        memory_engine.index_memory(_m.id, user.id, _m.content, _m.kind,
+                                                   _m.memory_type, _m.importance)
+                    except Exception:
+                        pass
+                if title_task is not None:
+                    try:
+                        conv.title = await title_task
+                        db.commit()
+                    except Exception:
+                        pass
+                t.mark("auto_title")
+                if _PERF:
+                    log.info("[PERF /chat] %s total=%.0fms", t.report(), t.total() * 1000)
+                # Late image results (weren't ready pre-done) as follow-up event.
+                if _img_task is not None and not _img_task.done():
+                    _late: list = []
+                    try:
+                        _late = await asyncio.wait_for(asyncio.shield(_img_task), timeout=20) or []
+                    except Exception:
+                        _late = []
+                    if _late:
+                        try:
+                            _md = "\n\n" + "\n".join(
+                                f"![{i['title']}]({i['thumb']})" for i in _late)
+                        except Exception:
+                            _md = ""
+                        if _md:
+                            yield "data: " + json.dumps(
+                                {"type": "images", "markdown": _md}, ensure_ascii=False) + "\n\n"
+                # Study visuals need gated LLM calls — always post-done events.
+                if slash_cmd == "visuals" and not study_blocks.get("visual_cards") \
+                        and not study_blocks.get("visual_svg"):
+                    _got_visual = False
+                    try:
+                        _retry = await ai_core.generate_reply(
+                            f"{study.SVG_RETRY_SYS}\n\nTopic: {slash_topic or slash_arg}",
+                            ctx, history, memory_context, adaptation_text,
+                            reasoning="low", max_tokens=800)
+                        _, _cards2 = study.extract_cards(_retry)
+                        if _cards2:
+                            yield "data: " + json.dumps(
+                                {"type": "visual_cards", "cards": _cards2},
+                                ensure_ascii=False) + "\n\n"
+                            _got_visual = True
+                        else:
+                            _, _svg2 = study.extract_svg(_retry)
+                            if _svg2:
+                                yield "data: " + json.dumps(
+                                    {"type": "visual_svg", "svg": _svg2},
+                                    ensure_ascii=False) + "\n\n"
+                                _got_visual = True
+                    except Exception as e:
+                        log.warning("[ASHRA API] study visual retry failed: %s",
+                                    type(e).__name__)
+                    if not _got_visual:
+                        # Deterministic fallback so visuals never come back empty.
+                        try:
+                            _cards3 = study.cards_from_prose(reply, slash_topic or slash_arg)
+                        except Exception:
+                            _cards3 = {}
+                        if _cards3:
+                            yield "data: " + json.dumps(
+                                {"type": "visual_cards", "cards": _cards3},
+                                ensure_ascii=False) + "\n\n"
+            except Exception as e:
+                log.warning("[ASHRA API] post-done bookkeeping failed: %s",
+                            type(e).__name__)
+                try:
+                    db.rollback()
+                except Exception:
+                    pass
 
         return StreamingResponse(
             _events(), media_type="text/event-stream",
