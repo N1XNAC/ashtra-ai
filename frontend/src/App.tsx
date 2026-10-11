@@ -40,6 +40,48 @@ async function throwFor(r: Response): Promise<never> {
   if (r.status === 502) msg = msg + ' (vision link not configured — see backend/.env.example)'
   throw new ApiError(r.status, msg, r.headers.get('Retry-After'))
 }
+/* POST + read a server-sent-events stream (build/edit, build/website) */
+async function apiSSE(path: string, body: unknown, timeoutMs: number,
+  onEvent: (ev: { type?: string; payload?: unknown; detail?: string; label?: string; text?: string; sources?: unknown }) => void) {
+  const headers: Record<string, string> = { 'Content-Type': 'application/json' }
+  if (API_KEY) headers['X-API-Key'] = API_KEY
+  let r: Response
+  try {
+    r = await fetch(API + path, { method: 'POST', headers, body: JSON.stringify(body), signal: AbortSignal.timeout(timeoutMs) })
+  } catch (e) {
+    console.log('[ASHRA ERROR]', e instanceof Error ? `${e.name}: ${e.message}` : e)
+    if (e instanceof DOMException && e.name === 'TimeoutError') throw new ApiError(0, 'Request timed out — the build may still finish; reopen Build & Run shortly.', null)
+    throw new ApiError(0, 'Network failed to fetch — check connection / VPN / adblock.', null)
+  }
+  console.log('[ASHRA] response status:', r.status, path)
+  if (!r.ok) await throwFor(r)
+  if (!r.body) throw new ApiError(0, 'Empty response from server.', null)
+  const reader = r.body.getReader()
+  const dec = new TextDecoder()
+  let buf = ''
+  for (;;) {
+    const { done, value } = await reader.read()
+    if (done) break
+    buf += dec.decode(value, { stream: true })
+    let idx: number
+    while ((idx = buf.indexOf('\n\n')) >= 0) {
+      const block = buf.slice(0, idx)
+      buf = buf.slice(idx + 2)
+      for (const line of block.split('\n')) {
+        if (!line.startsWith('data: ')) continue
+        try { onEvent(JSON.parse(line.slice(6))) } catch { /* partial frame */ }
+      }
+    }
+  }
+}
+/* backend build phase → human label for the progress row */
+const PHASE_LABELS: Record<string, string> = {
+  plan: 'planning…', generate: 'generating code…', customize: 'customizing template…',
+  diff: 'writing patch…', rewrite: 'rewriting full page (slow)…',
+  repair: 'repairing…', save: 'saving…',
+  understanding: 'understanding…', searching: 'searching…',
+  reading: 'reading sources…', writing: 'writing answer…',
+}
 /* multipart (image upload) — no JSON content-type */
 async function apiForm(path: string, form: FormData) {
   const headers: Record<string, string> = {}
@@ -57,8 +99,10 @@ type ChatPayload = {
   conversation_id?: string; reply?: string
   sources?: unknown[]; tool_calls?: { tool: string }[]
   adaptations_made?: string[]; saved?: string[]
+  study?: { visual?: { title: string; thumb: string }[]; visual_svg?: string; visual_cards?: VCards; actions?: string[]; visual_available?: boolean; expect?: string }
 }
-async function readChatStream(r: Response, onDelta: (acc: string) => void): Promise<ChatPayload> {
+async function readChatStream(r: Response, onDelta: (acc: string) => void,
+  onEvent?: (ev: { type?: string; images?: { title: string; thumb: string }[]; svg?: string; cards?: VCards }) => void): Promise<ChatPayload> {
   const reader = r.body!.getReader()
   const dec = new TextDecoder()
   let buf = ''
@@ -77,6 +121,9 @@ async function readChatStream(r: Response, onDelta: (acc: string) => void): Prom
         try { ev = JSON.parse(line.slice(5).trim()) } catch { continue }
         if (ev.type === 'delta') { acc += ev.text || ''; onDelta(acc) }
         else if (ev.type === 'done') done = ev.payload ?? null
+        else if (ev.type === 'visual') { try { onEvent?.(ev) } catch { /* ignore */ } }
+        else if (ev.type === 'visual_svg') { try { onEvent?.(ev) } catch { /* ignore */ } }
+        else if (ev.type === 'visual_cards') { try { onEvent?.(ev) } catch { /* ignore */ } }
         else if (ev.type === 'error') {
           if (acc) return { reply: acc } /* keep the text already on screen */
           throw new ApiError(0, ev.detail || 'Stream failed.', null)
@@ -177,8 +224,9 @@ function renderMd(src: string) {
 }
 
 /* ---------- types ---------- */
-type View = 'chat' | 'library' | 'projects' | 'plugins' | 'build' | 'market' | 'memory' | 'you' | 'settings'
-type Msg = { role: string; content: string; meta?: string; fresh?: boolean; attachment?: string; saved?: string[] }
+type View = 'chat' | 'library' | 'projects' | 'plugins' | 'build' | 'market' | 'memory' | 'you' | 'settings' | 'answer'
+type VCards = { title: string; flow: boolean; items: { icon: string; label: string; text: string }[] }
+type Msg = { role: string; content: string; meta?: string; fresh?: boolean; attachment?: string; saved?: string[]; study?: { visual?: { title: string; thumb: string }[]; visual_svg?: string; visual_cards?: VCards; actions?: string[]; visual_available?: boolean; expect?: string } }
 type Conv = { id: string; title: string; created_at?: string; is_build?: boolean }
 /* Per-chat session: drafts, attachments, messages and working state live here,
    keyed by conversation id ('new' for the unsent draft). Switching chats can
@@ -225,6 +273,25 @@ const SUGGESTIONS: { t: string; s: string }[] = [
   { t: 'Create a portfolio', s: 'Show your work in one page' },
   { t: 'Make a landing page', s: 'One focused page that converts' },
 ]
+/* Quick slash presets fill the composer instead of navigating away. */
+const QUICK_ACTIONS: { t: string; s: string; fill: string }[] = [
+  { t: '/study', s: 'Learn anything, with visuals', fill: '/study ' },
+  { t: '/websearch', s: 'Search the web with sources', fill: '/websearch ' },
+  { t: '/quiz', s: 'Test yourself on a topic', fill: '/quiz ' },
+]
+/* Home shows 3 of the 6 options, reshuffled on every page load. */
+let homePick: string[] | null = null
+function pickHome(): string[] {
+  if (!homePick) {
+    const ids = [...SUGGESTIONS.map(s => s.t), ...QUICK_ACTIONS.map(s => s.t)]
+    for (let i = ids.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1))
+      ;[ids[i], ids[j]] = [ids[j], ids[i]]
+    }
+    homePick = ids.slice(0, 3)
+  }
+  return homePick
+}
 
 /* ---------- shared composer shell: Uiverse-style gradient composer,
    identical on every screen ---------- */
@@ -254,10 +321,11 @@ function ComposerShell({ lead, field, canSend, onSend, sendLabel, head }: {
 
 /* ---------- shared thread shell: Chat AND Build & Run render through this,
    so both screens are pixel-identical ---------- */
-function ThreadShell({ msgs, busy, status, empty, composer, footer, actionIndex, action }: {
+function ThreadShell({ msgs, busy, status, empty, composer, footer, actionIndex, action, onAction }: {
   msgs: Msg[] | null; busy: boolean; status: string
   empty: ReactNode; composer: ReactNode; footer?: ReactNode
   actionIndex?: number | null; action?: ReactNode
+  onAction?: (cmd: string) => void
 }) {
   const bottomRef = useRef<HTMLDivElement>(null)
   /* instant while streaming (smooth would queue up and jank), smooth otherwise */
@@ -275,13 +343,13 @@ function ThreadShell({ msgs, busy, status, empty, composer, footer, actionIndex,
             <div key={i} className={m.fresh ? 'msg userrow fresh' : 'msg userrow'}>
               <div className="body">
                 {m.attachment && <div className="attchip"><Icon name="image" size={13} /> {m.attachment}</div>}
-                {m.content}
+                {(() => { const sm = m.content.match(/^\/(\w+)\s+([\s\S]*)$/); return sm ? (<><span className="slashchip">/{sm[1]}</span> {sm[2]}</>) : m.content })()}
               </div>
             </div>
           ) : (
             <div key={i} className={m.fresh ? 'msg fresh' : 'msg'}>
               <div className="body">
-                <div className="md" dangerouslySetInnerHTML={{ __html: renderMd(m.content) }} />
+                <AssistantBody m={m} onAction={c => onAction?.('/' + c)} />
                 {m.saved?.length ? (
                   <div className="memnote">
                     <span className="memnote-t"><Icon name="memory" size={12} /> Saved to memory</span>
@@ -320,7 +388,150 @@ function ThreadShell({ msgs, busy, status, empty, composer, footer, actionIndex,
 }
 
 /* site-building intent detector for the Build & Run nudge popup */
-const BUILD_HINT_RE = /(^|\b)(build|create|make|design|code|develop|generate|ship)\b[\s\S]{0,45}\b(site|website|webpage|web\s?page|landing|portfolio|blog|store|shop|web\s?app)\b|\b(build|make|create)\s+(me\s+)?a\s+(site|website)\b/i
+const BUILD_HINT_RE = /(^|\b)(build|create|make|design|develop|generate)\b[\s\S]{0,30}\b(site|website|webpage|web\s?page|landing|portfolio|blog|store|shop|web\s?app)\b|\b(code|develop)\b[\s\S]{0,20}\b(website|web\s?app|site)\b|\b(build|make|create)\s+(me\s+)?a\s+(site|website|web\s?page)\b/i
+
+/* ---------- slash commands (/study …) ---------- */
+const SLASH_COMMANDS = [
+  { cmd: 'study', hint: '<topic>', desc: 'Study mode — explainer first, then pick flashcards, quiz, visuals' },
+  { cmd: 'flashcards', hint: '[topic]', desc: 'Flashcards for the topic — saved to notes' },
+  { cmd: 'quiz', hint: '[topic]', desc: 'Quiz me — 3 questions, reply to score' },
+  { cmd: 'visuals', hint: '[topic]', desc: 'Show pictures and diagrams' },
+  { cmd: 'websearch', hint: '<query>', desc: 'Search the web — cited answer with sources' },
+]
+function parseStudy(content: string, expect = ''): { body: string; flashcards: { q: string; a: string }[]; quiz: string[] } {
+  const clean = (s: string) => s.replace(/^[\d.)\-\*\s>]+/, '').replace(/^[`*"']+|[`*"']+$/g, '').trim()
+  const lines = content.split('\n')
+  const isFc = (l: string) => /^\s*\**\s*FLASHCARDS?\s*\**:?\s*$/.test(l)
+  const isQz = (l: string) => /^\s*\**\s*QUIZ(ZES)?\s*\**:?\s*$/.test(l)
+  let fi = -1, qi = -1
+  lines.forEach((l, i) => { if (fi < 0 && isFc(l)) fi = i; else if (qi < 0 && isQz(l)) qi = i })
+  const parseFc = (ls: string[]) => {
+    const out: { q: string; a: string }[] = []
+    for (const line of ls) {
+      const t = line.trim()
+      if (t.length < 3) continue
+      let q = '', a = ''
+      if (t.includes('|')) { const p = t.split('|'); q = p[0]; a = p.slice(1).join('|') }
+      else {
+        const m = t.match(/^(.*?\?)\s*(?:A\s*:\s*)?(.+)$/) || t.match(/^(.*?)\bA\s*:\s*(.+)$/i)
+        if (!m) continue
+        q = m[1]; a = m[2]
+      }
+      q = clean(q.replace(/^Q\s*:\s*/i, '')); a = clean(a.replace(/^A\s*:\s*/i, ''))
+      if (q && a) out.push({ q: q.slice(0, 200), a: a.slice(0, 300) })
+    }
+    return out.slice(0, 6)
+  }
+  const parseQz = (ls: string[]) => {
+    const out: string[] = []
+    for (const line of ls) {
+      const t = clean(line)
+      if (t.length >= 4 && !/^(quiz|flashcards?)\b/i.test(t)) out.push(t.slice(0, 250))
+      if (out.length >= 5) break
+    }
+    return out.slice(0, 5)
+  }
+  if (fi < 0 && qi < 0) {
+    // format-only replies often skip the header — recover by shape
+    if (expect === 'flashcards') {
+      const bare = parseFc(lines)
+      if (bare.length) return { body: '', flashcards: bare, quiz: [] }
+    }
+    if (expect === 'quiz') {
+      const numbered = lines.map(l => l.trim()).filter(l => /^[\d]+[.)]\s+\S/.test(l)).map(l => clean(l).slice(0, 250)).slice(0, 5)
+      if (numbered.length) return { body: '', flashcards: [], quiz: numbered }
+    }
+    return { body: content, flashcards: [], quiz: [] }
+  }
+  const section = (idx: number) => {
+    const next = [fi, qi].filter(x => x > idx)
+    return lines.slice(idx + 1, next.length ? Math.min(...next) : lines.length)
+  }
+  const first = [fi, qi].filter(x => x >= 0)
+  const body = lines.slice(0, Math.min(...first)).join('\n').trim()
+  return {
+    body,
+    flashcards: fi >= 0 ? parseFc(section(fi)) : [],
+    quiz: qi >= 0 ? parseQz(section(qi)) : [],
+  }
+}
+function VisualCards({ cards }: { cards: VCards }) {
+  return (
+    <div className="vcards">
+      {cards.title ? <div className="vcap">{cards.title}</div> : null}
+      <div className={`vlist${cards.flow ? ' flow' : ''}`}>
+        {cards.items.map((it, i) => (
+          <div key={i} className="vcard" style={{ animationDelay: `${Math.min(i, 8) * 90}ms` }}>
+            {cards.flow && <span className="vnum">{i + 1}</span>}
+            <span className="vicon">{it.icon}</span>
+            <span className="vbody"><b>{it.label}</b><span>{it.text}</span></span>
+          </div>
+        ))}
+      </div>
+    </div>
+  )
+}
+function SvgBlock({ svg }: { svg: string }) {  // Pure animation (SMIL/CSS) renders inline. Anything scripted — inline
+  // <script>, on* handlers, javascript: URIs — runs isolated in a sandbox
+  // frame: JS executes but cannot touch the app (no allow-same-origin).
+  const active = /<script[\s>]|\son\w+\s*=|javascript\s*:/i.test(svg)
+  if (active) {
+    return <iframe className="svgframe" title="interactive visual" sandbox="allow-scripts" srcDoc={svg} />
+  }
+  return <div className="svgblock" dangerouslySetInnerHTML={{ __html: svg }} />
+}
+function FlashCard({ q, a }: { q: string; a: string }) {  const [flip, setFlip] = useState(false)
+  return (
+    <button className={`fcard${flip ? ' flip' : ''}`} onClick={() => setFlip(v => !v)} title="Tap to flip">
+      <span className="fq">{q}</span>
+      <span className="fa">{flip ? a : 'Tap to reveal…'}</span>
+    </button>
+  )
+}
+const ACTION_LABELS: Record<string, string> = { flashcards: 'Flashcards', quiz: 'Quiz me', visuals: 'Show visuals' }
+function AssistantBody({ m, onAction }: { m: Msg; onAction: (cmd: string) => void }) {
+  const visual = m.study?.visual
+  const svg = m.study?.visual_svg
+  const cards = m.study?.visual_cards
+  const actions = m.study?.actions ?? []
+  const st = parseStudy(m.content, m.study?.expect ?? '')
+  const marked = (visual?.length ?? 0) > 0 || !!svg || !!cards || st.flashcards.length > 0 || st.quiz.length > 0 || actions.length > 0
+  if (!marked) return <div className="md" dangerouslySetInnerHTML={{ __html: renderMd(m.content) }} />
+  return (<>
+    {st.body ? <div className="md" dangerouslySetInnerHTML={{ __html: renderMd(st.body) }} /> : null}
+    {cards ? <VisualCards cards={cards} /> : null}
+    {svg ? <SvgBlock svg={svg} /> : null}
+    {visual && visual.length > 0 && (
+      <div className="scards">
+        {visual.map((v, i) => (
+          <figure key={i} className="scard">
+            <img src={v.thumb} alt={v.title} loading="lazy" />
+            <figcaption>{v.title}</figcaption>
+          </figure>
+        ))}
+      </div>
+    )}
+    {st.flashcards.length > 0 && (
+      <div className="fcards">
+        <div className="fcap">Flashcards — saved to notes, tap to flip</div>
+        {st.flashcards.map((f, i) => <FlashCard key={i} q={f.q} a={f.a} />)}
+      </div>
+    )}
+    {st.quiz.length > 0 && (
+      <div className="quizblock">
+        <div className="fcap">Quick quiz — reply with your answers</div>
+        <ol>{st.quiz.map((q, i) => <li key={i}>{q}</li>)}</ol>
+      </div>
+    )}
+    {actions.length > 0 && (
+      <div className="studyacts">
+        {actions.map(a => (
+          <button key={a} className="mini" onClick={() => onAction(a)}>{ACTION_LABELS[a] ?? a}</button>
+        ))}
+      </div>
+    )}
+  </>)
+}
 
 function Chat({ convId, sessKey, sess, patchSess, onNewConv, refreshSidebar, onDraft, isBuild, goBuild }: {
   convId: string | null; sessKey: string; sess: Sess
@@ -334,19 +545,16 @@ function Chat({ convId, sessKey, sess, patchSess, onNewConv, refreshSidebar, onD
     try { return localStorage.getItem('ashtra-deep') === 'on' } catch { return false }
   })
   /* build chats open in the Build & Run workspace — Chat is plain chat only */
-  const [phase, setPhase] = useState(0) /* rotating status while busy */
-  const PHASES = ['Thinking', 'Recalling memories', 'Drafting reply', 'Polishing']
+  /* honest status: what the request is actually doing (no fake rotating labels) */
+  const lastMsg = cached && cached.length ? cached[cached.length - 1] : null
+  const aiStatus = !busy ? '' : busyLabel || ((lastMsg?.role === 'assistant' && lastMsg.content) ? 'Writing…' : 'Thinking…')
   /* site-building intent → gentle nudge to Build & Run (once per send attempt) */
-  const [buildHint, setBuildHint] = useState(false)
+  const [buildHint, setBuildHint] = useState<string | null>(null)
   const hintDone = useRef(false)
+  /* slash commands: /stud… → popup, Tab/↑↓ to pick */
+  const [slashIdx, setSlashIdx] = useState(0)
   const taRef = useRef<HTMLTextAreaElement>(null)
   const fileRef = useRef<HTMLInputElement>(null)
-
-  useEffect(() => {
-    if (!busy) { setPhase(0); return }
-    const t = setInterval(() => setPhase(p => (p + 1) % 4), 4000)
-    return () => clearInterval(t)
-  }, [busy])
 
   /* Hydrate once per session: store is truth; API only when never loaded.
      Late API replies are cancelled so fast chat-hopping can't cross-pollinate. */
@@ -400,7 +608,8 @@ function Chat({ convId, sessKey, sess, patchSess, onNewConv, refreshSidebar, onD
     if ((!content && !img) || sess.busy || sess.msgs === null) return
     if (!content && img) content = 'What do you see in this image?'
     if (content.length > MAXLEN) { patchSess(key, { err: `Message too long (max ${MAXLEN} chars).` }); return }
-    if (!img && !isBuild && !hintDone.current && BUILD_HINT_RE.test(content)) { setBuildHint(true); return }
+    /* advisory only: the message always sends — Build & Run is just a suggestion */
+    if (!img && !isBuild && !hintDone.current && BUILD_HINT_RE.test(content)) setBuildHint(content)
     if (img) URL.revokeObjectURL(img.url)
     const userMsg: Msg = { role: 'user', content, fresh: true, attachment: img ? img.file.name : undefined }
     patchSess(key, { msgs: [...base, userMsg], input: '', err: '', attach: null, busy: true, busyLabel: '' })
@@ -446,6 +655,9 @@ function Chat({ convId, sessKey, sess, patchSess, onNewConv, refreshSidebar, onD
       })
       if (!r.ok) await throwFor(r)
       let j: ChatPayload
+      let studyVisual: { title: string; thumb: string }[] | null = null
+      let studySvg: string | null = null
+      let studyCards: VCards | null = null
       if ((r.headers.get('content-type') || '').includes('text/event-stream') && r.body) {
         let last = 0
         j = await readChatStream(r, acc => {
@@ -453,7 +665,7 @@ function Chat({ convId, sessKey, sess, patchSess, onNewConv, refreshSidebar, onD
           if (now - last < 60) return /* batch flushes so React re-renders stay cheap */
           last = now
           patchSess(key, { msgs: [...base, userMsg, { role: 'assistant', content: acc, fresh: true }], busyLabel: '' })
-        })
+        }, ev => { if (ev.type === 'visual' && Array.isArray(ev.images)) studyVisual = ev.images; if (ev.type === 'visual_svg' && typeof ev.svg === 'string') studySvg = ev.svg; if (ev.type === 'visual_cards' && ev.cards && typeof ev.cards === 'object') studyCards = ev.cards as VCards })
       } else {
         j = await r.json()
       }
@@ -473,7 +685,19 @@ function Chat({ convId, sessKey, sess, patchSess, onNewConv, refreshSidebar, onD
       if (/\!\[[^\]]*\]\(https?:/.test(j.reply)) meta.push('images')
       if (j.adaptations_made?.length) meta.push('adapted')
       patchSess(targetKey, {
-        msgs: [...base, userMsg, { role: 'assistant', content: j.reply, meta: meta.join(' · ') || undefined, fresh: true, saved: Array.isArray(j.saved) && j.saved.length ? j.saved : undefined }],
+        msgs: [...base, userMsg, { role: 'assistant', content: j.reply, meta: meta.join(' · ') || undefined, fresh: true, saved: Array.isArray(j.saved) && j.saved.length ? j.saved : undefined, study: (() => {
+          const st: NonNullable<Msg['study']> = {}
+          if (studyVisual) st.visual = studyVisual
+          else if (j.study?.visual?.length) st.visual = j.study.visual
+          if (studySvg) st.visual_svg = studySvg
+          else if (j.study?.visual_svg) st.visual_svg = j.study.visual_svg
+          if (studyCards) st.visual_cards = studyCards
+          else if (j.study?.visual_cards) st.visual_cards = j.study.visual_cards
+          if (j.study?.actions?.length) st.actions = j.study.actions
+          if (typeof j.study?.visual_available === 'boolean') st.visual_available = j.study.visual_available
+          if (typeof j.study?.expect === 'string') st.expect = j.study.expect
+          return Object.keys(st).length ? st : undefined
+        })() }],
         busy: false, busyLabel: '',
       })
       console.log('[ASHRA] generation complete')
@@ -487,30 +711,53 @@ function Chat({ convId, sessKey, sess, patchSess, onNewConv, refreshSidebar, onD
     }
   }
 
+  /* slash autocomplete: "/st" → [study] */
+  const slashQ = (() => { const m = /^\s*\/(\w*)$/.exec(input); return m ? m[1].toLowerCase() : null })()
+  const slashOpts = slashQ === null ? [] : SLASH_COMMANDS.filter(c => c.cmd.startsWith(slashQ))
+  const sIdx = slashOpts.length ? Math.min(slashIdx, slashOpts.length - 1) : 0
+  const completeSlash = (cmd: string) => {
+    patchSess(sessKey, { input: `/${cmd} ` }); setSlashIdx(0)
+    requestAnimationFrame(() => { taRef.current?.focus(); autosize() })
+  }
+
   const welcome = (
     <div className="welcome">
       <h1>What are we building today?</h1>
       <p>Describe your business. Get a live site.</p>
       <div className="suggest">
-        {SUGGESTIONS.map(s => (
-          <button key={s.t} className="sug" onClick={() => goBuild(s.t)}>
-            <span>{s.t}<small>{s.s}</small></span>
-          </button>
-        ))}
+        {pickHome().map(t => {
+          const b = SUGGESTIONS.find(s => s.t === t)
+          if (b) return (
+            <button key={t} className="sug" onClick={() => goBuild(b.t)}>
+              <span>{b.t}<small>{b.s}</small></span>
+            </button>
+          )
+          const q = QUICK_ACTIONS.find(s => s.t === t)
+          if (q) return (
+            <button key={t} className="sug" onClick={() => {
+              patchSess(sessKey, { input: q.fill })
+              requestAnimationFrame(() => { taRef.current?.focus(); autosize() })
+            }}>
+              <span>{q.t}<small>{q.s}</small></span>
+            </button>
+          )
+          return null
+        })}
       </div>
     </div>
   )
   return (
-    <ThreadShell msgs={cached} busy={busy} status={busyLabel || `${PHASES[phase]}…`} empty={welcome}
+    <ThreadShell msgs={cached} busy={busy} status={aiStatus} empty={welcome}
+      onAction={c => send(c)}
       composer={<ComposerShell
         head={<>
-          {buildHint && (
+          {buildHint !== null && (
             <div className="buildhint" role="dialog" aria-label="Use Build and Run">
               <div className="bh-t">Building a website?</div>
               <div className="bh-b">Coding sites is what <b>Build &amp; Run</b> is for — it builds, previews and hands you the zip.</div>
               <div className="bh-a">
-                <button className="mini" onClick={() => { setBuildHint(false); hintDone.current = true; send() }}>Skip</button>
-                <button className="mini primary" onClick={() => { setBuildHint(false); hintDone.current = true; goBuild(input.trim()) }}>Go to Build &amp; Run</button>
+                <button className="mini" onClick={() => { setBuildHint(null); hintDone.current = true }}>Dismiss</button>
+                <button className="mini primary" onClick={() => { const t = buildHint; setBuildHint(null); hintDone.current = true; goBuild(t) }}>Go to Build &amp; Run</button>
               </div>
             </div>
           )}
@@ -521,6 +768,20 @@ function Chat({ convId, sessKey, sess, patchSess, onNewConv, refreshSidebar, onD
             <button className="copybtn" onClick={clearAttach} aria-label="Remove image">×</button>
           </div>
         ) : null)}
+          {slashOpts.length > 0 && (
+            <div className="slashpop slashpop-top" role="listbox" aria-label="Commands">
+              {slashOpts.map((c, i) => (
+                <button key={c.cmd} role="option" aria-selected={i === sIdx}
+                  className={`slashitem${i === sIdx ? ' on' : ''}`}
+                  onMouseDown={e => e.preventDefault()}
+                  onClick={() => completeSlash(c.cmd)}>
+                  <span className="slashcmd">/{c.cmd}</span>
+                  <span className="slashhint">{c.hint}</span>
+                  <span className="slashdesc">{c.desc}</span>
+                </button>
+              ))}
+            </div>
+          )}
         </>}
         boxExtra={morph ? 'gulp' : ''}
         lead={<>
@@ -539,8 +800,15 @@ function Chat({ convId, sessKey, sess, patchSess, onNewConv, refreshSidebar, onD
             id="ashtra-composer" name="message"
             ref={taRef} rows={1} value={input} maxLength={MAXLEN + 100}
             onChange={e => { patchSess(sessKey, { input: e.target.value }); autosize() }}
-            onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send() } }}
-            placeholder="Message AZX…" />
+            onKeyDown={e => {
+              if (slashOpts.length > 0) {
+                if (e.key === 'ArrowDown') { e.preventDefault(); setSlashIdx(i => (i + 1) % slashOpts.length); return }
+                if (e.key === 'ArrowUp') { e.preventDefault(); setSlashIdx(i => (i - 1 + slashOpts.length) % slashOpts.length); return }
+                if (e.key === 'Tab') { e.preventDefault(); completeSlash(slashOpts[sIdx].cmd); return }
+              }
+              if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send() }
+            }}
+            placeholder="Message AZX…  (try /study photosynthesis)" />
         }
         canSend={!(busy || cached === null || (!input.trim() && !attach))}
         onSend={() => send()} sendLabel="Send" />
@@ -594,13 +862,14 @@ function Sidebar({ view, setView, convId, setConvId, convs, onNew, onDelete, onD
         <div className="drawer-top">
           <div className="wordmark">AZX</div>
           <div className="drawer-top-r">
-            <button className="iconbtn" aria-label="Close menu" onClick={close}><Icon name="x" size={21} /></button>
+            <button className="iconbtn plain" aria-label="Close menu" onClick={close}><Icon name="x" size={21} /></button>
           </div>
         </div>
         <nav className="mnav">
           {row('New chat', 'pen', false, () => { onNew(); close() })}
           {row('Build & Run', 'code', view === 'build', onBuild)}
           {row('Templates', 'grid', view === 'market', () => go('market'))}
+          {row('Answers', 'search', view === 'answer', () => go('answer'))}
           {row('Memory', 'memory', view === 'memory', () => go('memory'))}
         </nav>
         <div className="drawer-search"><Icon name="search" size={16} />
@@ -641,15 +910,12 @@ function Sidebar({ view, setView, convId, setConvId, convs, onNew, onDelete, onD
           ))}
           {rows.length === 0 && <div className="sect">No chats yet</div>}
         </div>
-        <nav className="mnav mnav-more">
-          {row('You', 'user', view === 'you', () => go('you'))}
-        </nav>
         <div className="drawer-profile" role="button" tabIndex={0}
           onClick={() => go('you')}
           onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') go('you') }}>
-          <div className="dp-ava">{(name || 'A').slice(0, 1).toUpperCase()}</div>
-          <div className="dp-meta"><div className="dp-name">{name || 'You'}</div></div>
-          <button className="iconbtn" aria-label="Settings" onClick={e => { e.stopPropagation(); go('settings') }}><Icon name="gear" size={19} /></button>
+          <div className="dp-ava">{(name || 'P').slice(0, 1).toUpperCase()}</div>
+          <div className="dp-meta"><div className="dp-name">{name || 'Profile'}</div></div>
+          <button className="iconbtn plain" aria-label="Settings" onClick={e => { e.stopPropagation(); go('settings') }}><Icon name="gear" size={19} /></button>
         </div>
       </div>
     </>
@@ -786,6 +1052,20 @@ function BuildPanel({ seed, onConsumed, conversationId, onBuilt, onNewBuild }: {
   const [busy, setBusy] = useState(false)
   const [editBusy, setEditBusy] = useState(false)
   const [pubBusy, setPubBusy] = useState(false)
+  /* build/edit progress: elapsed timer + live phase label */
+  const [phase, setPhase] = useState<string | null>(null)
+  const [elapsed, setElapsed] = useState(0)
+  const elapsedRef = useRef<number | null>(null)
+  const startProg = () => {
+    setElapsed(0); setPhase('starting…')
+    const t0 = Date.now()
+    if (elapsedRef.current !== null) clearInterval(elapsedRef.current)
+    elapsedRef.current = window.setInterval(() => setElapsed(Math.floor((Date.now() - t0) / 1000)), 500)
+  }
+  const stopProg = () => {
+    if (elapsedRef.current !== null) { clearInterval(elapsedRef.current); elapsedRef.current = null }
+    setPhase(null)
+  }
   const push = (s: string) => setLog(l => [...l.slice(-50), s])
   async function run() {
     const p = prompt.trim()
@@ -809,10 +1089,22 @@ function BuildPanel({ seed, onConsumed, conversationId, onBuilt, onNewBuild }: {
     }
     say(`$ ${p.length > 80 ? p.slice(0, 80) + '…' : p}`)
     say('> coding…')
+    startProg()
     const t1 = setTimeout(() => say('> polishing…'), 10000)
     const t2 = setTimeout(() => say('> final touches…'), 22000)
     try {
-      const j = await api('/build/website', { method: 'POST', body: JSON.stringify({ user_id: USER, prompt: p }) }, 200000) as { status?: string; reply?: string; job_id: string; name: string; template: string; html: string; style_ref?: string; conversation_id?: string }
+      const res: {
+        j: { status?: string; reply?: string; job_id: string; name: string; template: string; html: string; style_ref?: string; conversation_id?: string } | null
+        err: string | null
+      } = { j: null, err: null }
+      await apiSSE('/build/website', { user_id: USER, prompt: p }, 300000, (ev) => {
+        if (ev.type === 'done') res.j = ev.payload as typeof res.j
+        if (ev.type === 'error') res.err = String(ev.detail ?? 'build failed')
+        if (ev.type === 'phase' && ev.label) setPhase(PHASE_LABELS[ev.label] ?? ev.label)
+      })
+      if (res.err) throw new Error(res.err)
+      const j = res.j
+      if (!j) throw new Error('build ended without a result — try again')
       if (j.status === 'chat' || !j.job_id) {
         say(j.reply || 'Tell me what website you want built.')
         persist({})
@@ -827,6 +1119,7 @@ function BuildPanel({ seed, onConsumed, conversationId, onBuilt, onNewBuild }: {
       persist({})
     }
     clearTimeout(t1); clearTimeout(t2)
+    stopProg()
     setBusy(false)
   }
   /* chat-style edit: "make the hero darker" — applied to the current build */
@@ -836,13 +1129,22 @@ function BuildPanel({ seed, onConsumed, conversationId, onBuilt, onNewBuild }: {
     setEditBusy(true); setPrompt('')
     push(`$ ${ins.length > 80 ? ins.slice(0, 80) + '…' : ins}`)
     push('> applying change…')
+    startProg()
     try {
-      const j = await api('/build/edit', { method: 'POST', body: JSON.stringify({ job_id: jobId, instruction: ins }) }, 200000) as { html: string }
-      setHtml(j.html)
+      const res: { html: string | null; err: string | null } = { html: null, err: null }
+      await apiSSE('/build/edit', { job_id: jobId, instruction: ins }, 300000, (ev) => {
+        if (ev.type === 'done') res.html = (ev.payload as { html: string }).html
+        if (ev.type === 'error') res.err = String(ev.detail ?? 'edit failed')
+        if (ev.type === 'phase' && ev.label) setPhase(PHASE_LABELS[ev.label] ?? ev.label)
+      })
+      if (res.err) throw new Error(res.err)
+      if (!res.html) throw new Error('edit ended without a result — try again')
+      setHtml(res.html)
       push('> updated — preview refreshed.')
     } catch (e) {
       push(`> edit failed: ${e instanceof Error ? e.message : 'error'}`)
     }
+    stopProg()
     setEditBusy(false)
   }
   /* publish: make the build live at /build/site/{slug} */
@@ -886,7 +1188,7 @@ function BuildPanel({ seed, onConsumed, conversationId, onBuilt, onNewBuild }: {
       ? { role: 'user', content: l.slice(2) }
       : { role: 'assistant', content: l })
     return (
-      <ThreadShell msgs={log.length ? msgs : []} busy={busy} status="Working…"
+      <ThreadShell msgs={log.length ? msgs : []} busy={busy} status={busy && elapsed > 0 ? `Working… ${elapsed}s` : 'Working…'}
         empty={<div className="welcome"><h1>Describe your business. Get a live site.</h1>
           <p>AZX codes it, you preview it, then publish with one click.</p></div>}
         composer={
@@ -931,6 +1233,12 @@ function BuildPanel({ seed, onConsumed, conversationId, onBuilt, onNewBuild }: {
           }}>New build</button>
         </div>
       </div>
+      {(busy || editBusy) && (
+        <div className="bprog">
+          <div className="bprog-top"><span>{phase ?? 'working…'}</span><span>{elapsed}s</span></div>
+          <div className="bprog-track"><div className="bprog-fill" /></div>
+        </div>
+      )}
       {(log.length > 0 || editBusy) && (
         <div className="blog">
           {log.slice(-6).map((l, i) => (
@@ -1122,14 +1430,17 @@ function YouPanel({ name, onName }: { name: string; onName: (v: string) => void 
     try { setModel(await api(`/profile/${USER}/model`)) } catch { /* offline */ }
   }
   useEffect(() => { load() }, [])
-  async function patch(field: string, value: string) {
-    try { await api(`/profile/${USER}`, { method: 'PATCH', body: JSON.stringify({ [field]: value }) }) } catch { /* offline */ }
-    load()
+  function patch(field: string, value: string) {
+    /* optimistic: switch flips instantly, server syncs in the background */
+    setModel(m => (m ? { ...m, traits: { ...m.traits, [field]: value } } : m))
+    api(`/profile/${USER}`, { method: 'PATCH', body: JSON.stringify({ [field]: value }) })
+      .then(() => load())
+      .catch(() => load()) /* revert to server truth on failure */
   }
   const t = model?.traits ?? {}
   return (
     <div className="panel"><div className="panel-inner">
-      <h2>You</h2>
+      <h2>Profile</h2>
       <p className="desc">How AZX adapts to you. Confidence {String(model?.adaptation.confidence ?? '…')}.</p>
       <div className="lab">What should we call you?</div>
       <input className="namepill" value={name} maxLength={32} placeholder="Type a name…"
@@ -1152,18 +1463,21 @@ function YouPanel({ name, onName }: { name: string; onName: (v: string) => void 
 }
 
 /* ---------- settings ---------- */
-function SettingsPanel({ fx, setFx }: { fx: boolean; setFx: (v: boolean) => void }) {
+function SettingsPanel({ fs, setFs, onExport, canExport }: {
+  fs: string; setFs: (v: string) => void; onExport: () => void; canExport: boolean
+}) {
   const [confirm, setConfirm] = useState(false)
   return (
     <div className="panel"><div className="panel-inner">
       <h2>Settings</h2>
-      <div className="lab">Appearance</div>
+      <div className="lab">Reading</div>
+      <Seg options={['Normal', 'Large']}
+        value={fs === 'large' ? 'Large' : 'Normal'}
+        onPick={v => setFs(v === 'Large' ? 'large' : 'normal')} />
+      <div className="lab">Chat history</div>
       <div className="card setrow">
-        <span>Animations &amp; effects</span>
-        <button className={`toggle${fx ? ' on' : ''}`} role="switch" aria-checked={fx}
-          onClick={() => { const v = !fx; setFx(v); try { localStorage.setItem('ashtra-fx', v ? 'on' : 'off') } catch { /* quota */ } }}>
-          <i />
-        </button>
+        <span>Export open chat as markdown</span>
+        <button className="mini" disabled={!canExport} onClick={onExport}>Export</button>
       </div>
       <div className="lab">Local data</div>
       <div className="card setrow">
@@ -1171,7 +1485,11 @@ function SettingsPanel({ fx, setFx }: { fx: boolean; setFx: (v: boolean) => void
         <button className="mini danger-solid" onClick={() => setConfirm(true)}>Clear</button>
       </div>
       <div className="lab">About</div>
-      <div className="card">AZX · v1</div>
+      <div className="card">
+        <div>AZX · v1.1 pre-release</div>
+        <div>Made by team NACX</div>
+        <div>Main dev <a className="bbar-live" href="https://instagram.com/nikusurv1" target="_blank" rel="noreferrer">@nikusurv1</a></div>
+      </div>
       {confirm && (
         <ConfirmDialog title="Clear local data?" body="Saved chats and build drafts stored on this device will be removed."
           confirmLabel="Clear" onCancel={() => setConfirm(false)}
@@ -1188,10 +1506,155 @@ function SettingsPanel({ fx, setFx }: { fx: boolean; setFx: (v: boolean) => void
   )
 }
 
+/* ---------- perplexity-lite answers ---------- */
+type ASrc = { n: number; title: string; url: string; snippet: string }
+type AThread = { id: string; question: string; focus: string; created_at: string | null }
+function renderCited(src: string, nSrc: number): string {
+  return renderMd(src).replace(/\[(\d+)\]/g, (m, d) => {
+    const n = parseInt(d, 10)
+    return (n >= 1 && n <= nSrc) ? `<a class="cite" href="#asrc-${n}">[${n}]</a>` : m
+  })
+}
+function AnswerPanel() {
+  const [q, setQ] = useState('')
+  const [focus, setFocus] = useState<'all' | 'web' | 'academic'>('all')
+  const [busy, setBusy] = useState(false)
+  const [phase, setPhase] = useState<string | null>(null)
+  const [elapsed, setElapsed] = useState(0)
+  const [question, setQuestion] = useState('')
+  const [answer, setAnswer] = useState<string | null>(null)
+  const [sources, setSources] = useState<ASrc[]>([])
+  const [followups, setFollowups] = useState<string[]>([])
+  const [err, setErr] = useState('')
+  const [threads, setThreads] = useState<AThread[]>([])
+  const timer = useRef<number | null>(null)
+  const stopTimer = () => {
+    if (timer.current !== null) { clearInterval(timer.current); timer.current = null }
+  }
+  const loadThreads = () => {
+    api(`/answer/threads?user_id=${USER}`).then((d: AThread[]) => {
+      if (Array.isArray(d)) setThreads(d)
+    }).catch(() => { /* offline */ })
+  }
+  useEffect(() => { loadThreads() }, [])
+  useEffect(() => stopTimer, [])
+  async function ask(question: string) {
+    const qq = question.trim()
+    if (!qq || busy) return
+    setBusy(true); setErr(''); setAnswer(''); setSources([]); setFollowups([])
+    setQuestion(qq); setQ(''); setPhase('starting…'); setElapsed(0)
+    const t0 = Date.now()
+    stopTimer()
+    timer.current = window.setInterval(() => setElapsed(Math.floor((Date.now() - t0) / 1000)), 500)
+    try {
+      let acc = ''
+      await apiSSE('/answer/ask', { user_id: USER, question: qq, focus }, 300000, (ev) => {
+        if (ev.type === 'phase' && ev.label) setPhase(PHASE_LABELS[ev.label] ?? ev.label)
+        if (ev.type === 'sources' && Array.isArray(ev.sources)) setSources(ev.sources as ASrc[])
+        if (ev.type === 'delta' && typeof ev.text === 'string') { acc += ev.text; setAnswer(acc) }
+        if (ev.type === 'done') {
+          const p = ev.payload as { answer: string; sources: ASrc[]; followups: string[] }
+          acc = p.answer; setAnswer(p.answer); setSources(p.sources ?? []); setFollowups(p.followups ?? [])
+        }
+        if (ev.type === 'error') setErr(String(ev.detail ?? 'answer failed'))
+      })
+      if (!acc && !err) setErr('Empty answer — try again.')
+      loadThreads()
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : 'answer failed')
+    }
+    stopTimer(); setBusy(false); setPhase(null)
+  }
+  async function openThread(id: string) {
+    if (busy) return
+    try {
+      const d = await api(`/answer/threads/${id}`) as { question: string; answer: string; sources: ASrc[]; followups: string[] }
+      setQuestion(d.question); setAnswer(d.answer); setSources(d.sources ?? []); setFollowups(d.followups ?? []); setErr('')
+    } catch { /* offline */ }
+  }
+  return (
+    <div className="panel"><div className="panel-inner">
+      <h2>Answers</h2>
+      <div className="seg">
+        {(['all', 'web', 'academic'] as const).map(f => (
+          <button key={f} className={focus === f ? 'on' : ''} onClick={() => setFocus(f)}>
+            {f === 'all' ? 'Web + Academic' : f[0].toUpperCase() + f.slice(1)}
+          </button>
+        ))}
+      </div>
+      <div className="arow">
+        <input value={q} maxLength={500} onChange={e => setQ(e.target.value)}
+          onKeyDown={e => { if (e.key === 'Enter') ask(q) }}
+          placeholder="Ask anything — answers come with sources…" aria-label="Ask a question" />
+        <button className="mini primary" disabled={busy || !q.trim()} onClick={() => ask(q)}>
+          {busy ? 'Asking…' : 'Ask'}
+        </button>
+      </div>
+      {busy && (
+        <div className="bprog">
+          <div className="bprog-top"><span>{phase ?? 'working…'}</span><span>{elapsed}s</span></div>
+          <div className="bprog-track"><div className="bprog-fill" /></div>
+        </div>
+      )}
+      {err && <div className="errbar"><div>{err}</div></div>}
+      {answer !== null && answer !== '' && (
+        <div className="ablock">
+          <div className="aq">{question}</div>
+          <div className="md" dangerouslySetInnerHTML={{ __html: renderCited(answer, sources.length) }} />
+          {sources.length > 0 && (
+            <div className="asrcs">
+              <div className="asrc-h">Sources</div>
+              {sources.map(s => (
+                <a key={s.n} id={`asrc-${s.n}`} className="asrc" href={s.url} target="_blank" rel="noreferrer">
+                  <span className="asrc-n">[{s.n}]</span>
+                  <span className="asrc-t">{s.title}</span>
+                </a>
+              ))}
+            </div>
+          )}
+          {followups.length > 0 && (
+            <div className="afol">
+              {followups.map((f, i) => (
+                <button key={i} className="mini" disabled={busy} onClick={() => ask(f)}>{f}</button>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+      {threads.length > 0 && (
+        <div className="athreads">
+          <div className="asrc-h">Recent</div>
+          {threads.map(t => (
+            <button key={t.id} className="athread" onClick={() => openThread(t.id)}>
+              <span className="athread-q">{t.question}</span>
+              <span className="athread-f">{t.focus}</span>
+            </button>
+          ))}
+        </div>
+      )}
+    </div></div>
+  )
+}
+
 /* ---------- shell ---------- */
 export default function App() {
-  const [view, setView] = useState<View>('chat')
-  const [convId, setConvId] = useState<string | null>(null)
+  /* refresh keeps you where you were — view + open chat survive reloads */
+  const [view, setView] = useState<View>(() => {
+    try {
+      const v = localStorage.getItem('ashtra-view')
+      return (['chat', 'library', 'projects', 'plugins', 'build', 'market', 'memory', 'you', 'settings', 'answer'] as View[]).includes(v as View) ? (v as View) : 'chat'
+    } catch { return 'chat' }
+  })
+  const [convId, setConvId] = useState<string | null>(() => {
+    try { return localStorage.getItem('ashtra-conv') } catch { return null }
+  })
+  useEffect(() => {
+    try {
+      localStorage.setItem('ashtra-view', view)
+      if (convId) localStorage.setItem('ashtra-conv', convId)
+      else localStorage.removeItem('ashtra-conv')
+    } catch { /* ignore */ }
+  }, [view, convId])
   const [convs, setConvs] = useState<Conv[]>([])
   const [sideOpen, setSideOpen] = useState(() => window.innerWidth > 760)
   const [confirmDel, setConfirmDel] = useState<string | null>(null)
@@ -1225,7 +1688,7 @@ export default function App() {
         const slim: Record<string, { msgs: Msg[] }> = {}
         for (const k of keys) {
           const m = sessions[k]?.msgs
-          if (m && m.length) slim[k] = { msgs: m.slice(-100).map(({ role, content, meta }) => ({ role, content, meta })) }
+          if (m && m.length) slim[k] = { msgs: m.slice(-100).map(({ role, content, meta, study }) => ({ role, content, meta, study })) }
         }
         localStorage.setItem('ashtra-sessions-v1', JSON.stringify(slim))
       } catch { /* quota — skip */ }
@@ -1250,6 +1713,24 @@ export default function App() {
   const [fx, setFx] = useState(() => {
     try { return localStorage.getItem('ashtra-fx') !== 'off' } catch { return true }
   })
+  const [fs, setFsState] = useState(() => {
+    try { return localStorage.getItem('ashtra-fs') || 'normal' } catch { return 'normal' }
+  })
+  function setFs(v: string) {
+    setFsState(v)
+    try { localStorage.setItem('ashtra-fs', v) } catch { /* quota */ }
+  }
+  /* export the open chat as markdown */
+  function exportChat() {
+    const msgs = (sessions[convId ?? 'new']?.msgs ?? []).filter(m => (m.content || '').trim())
+    if (!msgs.length) return
+    const md = `# AZX chat — ${new Date().toLocaleString()}\n\n` +
+      msgs.map(m => m.role === 'user' ? `## You\n${m.content}` : `## AZX\n${m.content}`).join('\n\n')
+    const url = URL.createObjectURL(new Blob([md], { type: 'text/markdown' }))
+    const a = document.createElement('a')
+    a.href = url; a.download = 'ashtra-chat.md'; a.click()
+    setTimeout(() => URL.revokeObjectURL(url), 5000)
+  }
 
   async function refreshConvs() {
     try { setConvs(await api(`/chat/conversations/${USER}`)) } catch { /* offline */ }
@@ -1342,7 +1823,7 @@ export default function App() {
   }, [modeOpen])
 
   return (
-    <div className={fx ? 'ash' : 'ash no-fx'}>
+    <div className={`${fx ? 'ash' : 'ash no-fx'}${fs === 'large' ? ' text-lg' : ''}`}>
       <Sidebar view={view} setView={setView} convId={convId} setConvId={setConvId}
         convs={convs} onNew={() => { if (sessions['new']?.busy) return; setConvId(null); setView('chat') }}
         onDelete={(id) => setConfirmDel(id)} onDeleteMany={delConvs}
@@ -1350,7 +1831,7 @@ export default function App() {
         name={userName} onBuild={startFreshBuild} onOpenBuild={openBuildConv} />
       <div className="main">
         <div className="topbar">
-          <button className="burger" onClick={() => setSideOpen(o => !o)} aria-label="Toggle sidebar"><Icon name="menu" size={22} /></button>
+          <button className="burger" style={{ visibility: sideOpen ? 'hidden' : 'visible', opacity: sideOpen ? 0 : 1 }} onClick={() => setSideOpen(o => !o)} aria-label="Open menu"><Icon name="menu" size={22} /></button>
           <div className="mode-wrap" onClick={e => e.stopPropagation()}>
             <button className="mode-sel" aria-haspopup="menu" aria-expanded={modeOpen}
               onClick={() => setModeOpen(o => !o)}>
@@ -1369,7 +1850,7 @@ export default function App() {
               </div>
             )}
           </div>
-          <button className="iconbtn top-new" aria-label="New chat"
+          <button className="iconbtn plain top-new" aria-label="New chat"
             onClick={() => { if (sessions['new']?.busy) return; setConvId(null); setView('chat') }}>
             <Icon name="plus" size={19} />
           </button>
@@ -1397,8 +1878,10 @@ export default function App() {
           </button>
         )}
         {view === 'memory' && <MemoryPanel />}
+        {view === 'answer' && <AnswerPanel />}
         {view === 'you' && <YouPanel name={userName} onName={setUserName} />}
-        {view === 'settings' && <SettingsPanel fx={fx} setFx={setFx} />}
+        {view === 'settings' && <SettingsPanel fs={fs} setFs={setFs} onExport={exportChat}
+          canExport={(sessions[convId ?? 'new']?.msgs ?? []).some(m => (m.content || '').trim())} />}
         {view === 'market' && <MarketPanel onUse={it => {
           /* Use template → seed Build & Run with the template as reference */
           try { localStorage.removeItem('ashtra-build-v1') } catch { /* quota */ }

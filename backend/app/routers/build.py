@@ -219,10 +219,25 @@ async def _understand(prompt: str, mem_ctx: str = "") -> dict:
             "spec": str(data.get("spec") or prompt).strip()[:3000]}
 
 
-async def _llm_html(messages: list[dict], model: str, max_tokens: int, effort: str = "medium") -> str:
-    """Groq call with backoff — big builds burn the free TPM quota, so a 429
-    right after a build is normal and must be waited out, not failed."""
-    import asyncio
+class _PayloadTooLarge(Exception):
+    """Provider rejected the request body (HTTP 413) — use the big-context chain."""
+
+
+# Groq's free org caps ~8k TPM (input + output), so anything past ~10KB of
+# input (≈3k tokens) can never fit — skip straight to the big-context provider.
+_GROQ_TPM_BUDGET = 7500  # estimated input tokens + max_tokens must fit here
+
+
+# Big-context chain (OpenRouter free tier): full template edits are 50KB+.
+_EDIT_FALLBACK_MODELS = [
+    "nvidia/nemotron-3-super-120b-a12b:free",
+    "google/gemma-4-26b-a4b-it:free",
+    "poolside/laguna-xs-2.1:free",
+]
+
+
+async def _groq_html(messages: list[dict], model: str, max_tokens: int, effort: str,
+                     patient: bool = True) -> str:
     payload = {"model": model, "messages": messages,
                "max_tokens": max_tokens, "temperature": 0.5,
                "reasoning_effort": effort}
@@ -232,7 +247,11 @@ async def _llm_html(messages: list[dict], model: str, max_tokens: int, effort: s
         for attempt in range(4):
             try:
                 r = await c.post(url, headers=headers, json=payload)
+                if r.status_code == 413:
+                    raise _PayloadTooLarge(f"groq rejected payload ({len(str(payload))} chars)")
                 if r.status_code == 429:
+                    if not patient:
+                        raise HTTPException(status_code=429, detail="groq busy")
                     try:
                         wait = int(r.headers.get("retry-after", "0") or 0)
                     except ValueError:
@@ -243,12 +262,240 @@ async def _llm_html(messages: list[dict], model: str, max_tokens: int, effort: s
                 return r.json()["choices"][0]["message"]["content"] or ""
             except httpx.TransportError:
                 await asyncio.sleep(5)
-    raise HTTPException(status_code=502,
+    raise HTTPException(status_code=429,
                         detail="Model is rate-limited right now — try again in a few seconds.")
+
+
+async def _openrouter_html(messages: list[dict], max_tokens: int,
+                           require_html: bool = False) -> str:
+    base = (settings.vision_base_url or "https://openrouter.ai/api/v1").rstrip("/")
+    key = settings.vision_api_key
+    if not key:
+        raise HTTPException(status_code=502,
+                            detail="Big-site model not configured (VISION_API_KEY missing).")
+    deadline = time.monotonic() + 240
+    errors: list[str] = []
+    payload = {"messages": messages, "max_tokens": max_tokens, "temperature": 0.5}
+    headers = {"Authorization": f"Bearer {key}", "Content-Type": "application/json"}
+    async with httpx.AsyncClient() as c:
+        for m in _EDIT_FALLBACK_MODELS:
+            left = deadline - time.monotonic()
+            if left <= 5:
+                break
+            for retry in range(2):
+                try:
+                    r = await c.post(f"{base}/chat/completions", headers=headers,
+                                     json={**payload, "model": m}, timeout=min(170, left))
+                    break
+                except httpx.TimeoutException:
+                    errors.append(f"{m}→timeout")
+                    r = None
+                    break
+                except httpx.TransportError as e:
+                    errors.append(f"{m}→{type(e).__name__}")
+                    r = None
+                    break
+                except Exception as e:
+                    errors.append(f"{m}→{type(e).__name__}")
+                    r = None
+                    break
+            if r is None:
+                continue
+            if r.status_code == 429 and retry == 0:
+                # free-tier quota — one patient retry before moving on
+                errors.append(f"{m}→HTTP 429")
+                await asyncio.sleep(10)
+                continue
+            if r.status_code >= 400:
+                errors.append(f"{m}→HTTP {r.status_code}")
+                continue
+            try:
+                content = (r.json()["choices"][0]["message"].get("content") or "").strip()
+            except Exception:
+                errors.append(f"{m}→badjson")
+                continue
+            if not content:
+                errors.append(f"{m}→empty")
+                continue
+            if require_html and "</html>" not in content.lower():
+                # free models silently truncate big files — try the next one
+                errors.append(f"{m}→incomplete({len(content)}c)")
+                continue
+            _log.info("openrouter %s ok (%d chars)", m, len(content))
+            return content
+    raise HTTPException(status_code=502,
+                        detail="Site model unavailable (" + ", ".join(errors[:4])
+                               + ") — try again shortly.")
+
+
+async def _llm_html(messages: list[dict], model: str, max_tokens: int, effort: str = "medium",
+                    require_html: bool = False) -> str:
+    """HTML LLM call with provider fallback.
+
+    Small prompts go to Groq (fast). Full template edits carry 50KB+ of HTML,
+    which Groq rejects with 413 (free org TPM cap) — those go to the
+    OpenRouter big-context chain instead of exploding into a 500.
+    """
+    input_chars = sum(len(m.get("content") or "") for m in messages)
+    # Groq free org ≈8k TPM shared with chat — only route when input+output fits.
+    # Diff calls (small max_tokens) fail fast to the chain instead of sleeping.
+    if input_chars / 3.4 + max_tokens <= _GROQ_TPM_BUDGET:
+        try:
+            return await _groq_html(messages, model, max_tokens, effort,
+                                    patient=max_tokens > 3000)
+        except _PayloadTooLarge:
+            pass  # bigger than it looked — big-context chain
+        except HTTPException:
+            pass  # rate-limited/unavailable — the chain may still work
+    return await _openrouter_html(messages, max_tokens, require_html=require_html)
 
 
 def _clean(html: str) -> str:
     return re.sub(r"^```html\s*|\s*```$", "", html.strip())
+
+
+_SSE_HEADERS = {"Cache-Control": "no-cache", "Connection": "keep-alive",
+                "X-Accel-Buffering": "no"}
+
+
+def _sse(obj: dict) -> str:
+    return "data: " + json.dumps(obj, ensure_ascii=False, default=str) + "\n\n"
+
+
+_DIFF_SYS = (
+    "You are a senior front-end developer editing a single-file HTML site. "
+    "Apply ONLY the requested change. Do NOT output the whole file — output "
+    "ONLY search/replace blocks, one per change, in this exact format:\n"
+    "<<<<<<< SEARCH\n"
+    "(exact lines copied verbatim from the current file, whitespace included)\n"
+    "=======\n"
+    "(the replacement lines)\n"
+    ">>>>>>> REPLACE\n"
+    "Rules: SEARCH must match the file exactly or the edit is discarded; keep "
+    "each block minimal but include enough surrounding lines to make it unique "
+    "in the file; no markdown fences, no explanations. "
+    "If no change is needed, output NOTHING."
+)
+
+
+def _apply_diff_blocks(html: str, out: str) -> tuple[str | None, str]:
+    """Apply SEARCH/REPLACE blocks. Returns (patched_html_or_None, reason).
+
+    Pass 1 matches verbatim; pass 2 matches whitespace-insensitively so minor
+    indentation drift doesn't force a slow full rewrite.
+    """
+    parts = out.split("<<<<<<< SEARCH")[1:]
+    if not parts:
+        return None, "no blocks"
+    raw_blocks: list[tuple[str, str]] = []
+    for p in parts:
+        if "=======" not in p or ">>>>>>> REPLACE" not in p:
+            return None, "malformed block"
+        search, rest = p.split("=======", 1)
+        repl, _ = rest.split(">>>>>>> REPLACE", 1)
+        search = search.strip().strip("`").strip()
+        repl = repl.strip().strip("`").strip()
+        if not search:
+            return None, "empty SEARCH"
+        raw_blocks.append((search, repl))
+    file_lines = html.split("\n")
+    norm_file = [l.strip() for l in file_lines]
+    for search, repl in raw_blocks:
+        if html.count(search) == 1:
+            html = html.replace(search, repl, 1)
+            continue
+        ns = [l.strip() for l in search.split("\n")]
+        n = len(ns)
+        hits = [i for i in range(len(norm_file) - n + 1)
+                if norm_file[i:i + n] == ns]
+        if len(hits) != 1:
+            return None, f"block matches {len(hits)}x"
+        orig_block = "\n".join(file_lines[hits[0]:hits[0] + n])
+        if html.count(orig_block) != 1:
+            return None, "ambiguous location"
+        html = html.replace(orig_block, repl, 1)
+        file_lines = html.split("\n")
+        norm_file = [l.strip() for l in file_lines]
+    return html, f"{len(raw_blocks)} blocks"
+
+
+async def _edit_html(html: str, instruction: str, model: str, on_phase=None) -> str:
+    """Diff-first edit with full-rewrite fallback. Returns complete HTML."""
+    if on_phase:
+        await on_phase("diff")
+    try:
+        dout = await _llm_html([
+            {"role": "system", "content": _DIFF_SYS},
+            {"role": "user", "content": (
+                f"CHANGE REQUEST: {instruction}\n\nCURRENT HTML:\n{html}")},
+        ], model, 2000)
+        patched, reason = _apply_diff_blocks(html, dout)
+        if patched and "</html>" in patched.lower() and len(patched) > len(html) // 2:
+            _log.info("diff edit ok (%s, %d chars)", reason, len(patched))
+            return patched
+        _log.info("diff edit rejected (%s) — falling back to full rewrite", reason)
+    except Exception as e:
+        _log.info("diff edit failed (%s) — falling back to full rewrite", type(e).__name__)
+    if on_phase:
+        await on_phase("rewrite")
+    out = await _llm_html([
+        {"role": "system", "content": _EDIT_SYS},
+        {"role": "user", "content": (
+            f"CHANGE REQUEST: {instruction}\n\nCURRENT HTML:\n{html}")},
+    ], model, 16000, "medium", require_html=True)
+    return _clean(out)
+
+
+async def _stream_work(work_factory):
+    """SSE wrapper: {type:start} → {type:tick|phase}* → {type:done,payload}|{type:error}.
+
+    The factory receives an `emit(kind, value)` coroutine it can use to report
+    progress phases (e.g. "diff" vs "rewrite"). Ticks every 4s keep slow
+    big-context edits alive through Cloudflare's ~100s proxy timeout, which
+    would 524 a silent JSON response.
+    """
+    q: asyncio.Queue = asyncio.Queue(maxsize=16)
+
+    async def _ticker():
+        while True:
+            await asyncio.sleep(4)
+            try:
+                q.put_nowait(("tick", None))
+            except asyncio.QueueFull:
+                pass
+
+    async def _emit(kind: str, value=None):
+        await q.put((kind, value))
+
+    async def _runner():
+        try:
+            result = await work_factory(_emit)
+            await q.put(("done", result))
+        except HTTPException as e:
+            await q.put(("error", e.detail or f"HTTP {e.status_code}"))
+        except Exception as e:
+            _log.warning("build stream failed: %s", type(e).__name__, exc_info=True)
+            await q.put(("error", f"{type(e).__name__}: {e}"[:300]))
+
+    ticker = asyncio.create_task(_ticker())
+    runner = asyncio.create_task(_runner())
+    try:
+        yield _sse({"type": "start"})
+        while True:
+            kind, val = await q.get()
+            if kind == "tick":
+                yield _sse({"type": "tick"})
+            elif kind == "phase":
+                yield _sse({"type": "phase", "label": val})
+            elif kind == "done":
+                yield _sse({"type": "done", "payload": val})
+                break
+            else:
+                yield _sse({"type": "error", "detail": val})
+                break
+    finally:
+        ticker.cancel()
+        runner.cancel()
 
 
 @router.get("/templates")
@@ -292,53 +539,186 @@ async def build_website(req: BuildRequest, request: Request, db: Session = Depen
     prompt = req.prompt.strip()
     if not prompt:
         raise HTTPException(status_code=400, detail="Prompt is empty.")
-    # Web Market template flow: "Use template" seeds the prompt with the
-    # template id — load that exact template and customize it 1:1 instead of
-    # generating a new site from scratch.
-    tid = (req.template_id or "").strip()
-    if not tid:
-        m = re.search(r"\btemplate-\d+\b", prompt)
-        tid = m.group(0) if m else ""
-    loaded = _market_template_html(tid) if tid else None
-    if loaded:
-        html, tname = loaded
-        # strip the "Customize the … template (id: …) for my business:" seed
-        custom = re.sub(
-            r"(?is)^\s*customize the .*?template\s*\(id:\s*template-\d+\)\s*"
-            r"for my business\s*:?\s*",
-            "", prompt).strip()
-        if custom:
-            # absolute base so assets/ resolve in srcDoc preview AND /build/site/{slug}
-            base = f'<base href="{str(request.base_url).rstrip("/")}/market/file/{tid}/">'
-            if not re.search(r"<base\s", html, re.I):
-                if re.search(r"<head[^>]*>", html, re.I):
-                    html = re.sub(r"(<head[^>]*>)", r"\1" + base, html, count=1, flags=re.I)
-                else:
-                    html = base + html
-            model = (getattr(settings, "build_model", "") or settings.groq_model
-                     or "openai/gpt-oss-120b")
+
+    async def _work(emit) -> dict:
+        # Web Market template flow: "Use template" seeds the prompt with the
+        # template id — load that exact template and customize it 1:1 instead of
+        # generating a new site from scratch.
+        tid = (req.template_id or "").strip()
+        if not tid:
+            m = re.search(r"\btemplate-\d+\b", prompt)
+            tid = m.group(0) if m else ""
+        loaded = _market_template_html(tid) if tid else None
+        if loaded:
+            html, tname = loaded
+            # strip the "Customize the … template (id: …) for my business:" seed
+            custom = re.sub(
+                r"(?is)^\s*customize the .*?template\s*\(id:\s*template-\d+\)\s*"
+                r"for my business\s*:?\s*",
+                "", prompt).strip()
+            if custom:
+                # absolute base so assets/ resolve in srcDoc preview AND /build/site/{slug}
+                base = f'<base href="{str(request.base_url).rstrip("/")}/market/file/{tid}/">'
+                if not re.search(r"<base\s", html, re.I):
+                    if re.search(r"<head[^>]*>", html, re.I):
+                        html = re.sub(r"(<head[^>]*>)", r"\1" + base, html, count=1, flags=re.I)
+                    else:
+                        html = base + html
+                model = (getattr(settings, "build_model", "") or settings.groq_model
+                         or "openai/gpt-oss-120b")
             try:
-                out = await _llm_html([
-                    {"role": "system", "content": _TPL_EDIT_SYS},
-                    {"role": "user", "content": (
-                        f"CHANGE REQUEST: {custom}\n\nTEMPLATE HTML:\n{html}")},
-                ], model, 14000, "medium")
-                cand = _clean(out)
+                cand = await _edit_html(html, custom, model,
+                                        on_phase=lambda label: emit("phase", label))
                 # only accept a complete rewrite of the same template; otherwise
                 # fall back to the exact untouched template (still a valid site)
                 if ("</html>" in cand.lower() and "<html" in cand.lower()
                         and not _PLACEHOLDER_RE.search(cand)):
                     html = cand
-            except HTTPException:
-                raise
             except Exception as e:
                 _log.warning("template customize failed (%s) — serving exact template",
                              type(e).__name__)
-        name = re.sub(r"[^a-z0-9]+", "-", (custom or tname).lower()).strip("-")[:40] or "site"
+            name = re.sub(r"[^a-z0-9]+", "-", (custom or tname).lower()).strip("-")[:40] or "site"
+            job_id = uuid.uuid4().hex[:12]
+            _JOBS[job_id] = {"name": name, "html": html, "ts": time.time()}
+            for k in [k for k, v in _JOBS.items() if time.time() - v["ts"] > 3600]:
+                _JOBS.pop(k, None)
+            try:
+                user = db.query(models.User).filter_by(id=req.user_id).first()
+                if not user:
+                    user = models.User(id=req.user_id, email=f"{req.user_id}@local")
+                    db.add(user)
+                    db.commit()
+                conv = models.Conversation(user_id=user.id, title=name)
+                db.add(conv)
+                db.commit()
+                db.add(models.Message(conversation_id=conv.id, role="user", content=prompt))
+                db.add(models.Message(conversation_id=conv.id, role="assistant",
+                                      content=f"Started from the **{tname}** template "
+                                              f"({tid}) — customized and ready. Open "
+                                              f"Build & Run to preview and publish."))
+                db.add(models.BuildSite(conversation_id=conv.id, job_id=job_id, html=html))
+                db.commit()
+            except Exception:
+                try:
+                    db.rollback()
+                except Exception:
+                    pass
+            return {"job_id": job_id, "name": name, "template": tid, "html": html,
+                    "style_ref": tname, "truncated": False,
+                    "conversation_id": conv.id if "conv" in locals() else None}
+        # Stage 1 — understand the demand before writing any code.
+        # What AZX already remembers about the user makes the spec personal
+        # ("my bakery" → knows the name, city, tone without being told again).
+        mem_ctx = ""
+        try:
+            relevant = memory_engine.retrieve_relevant(req.user_id, prompt, top_k=6)
+            mem_ctx = "\n".join(f"- {h['content']}" for h in relevant if h.get("content"))
+        except Exception:
+            mem_ctx = ""
+        await emit("phase", "plan")
+        try:
+            understanding = await _understand(prompt, mem_ctx)
+        except HTTPException:
+            raise
+        except Exception as e:
+            raise HTTPException(status_code=502, detail=f"Understand call failed: {type(e).__name__}")
+        if not understanding["want"]:
+            return {"status": "chat", "reply": understanding["reply"]}
+        template = (req.template.strip().lower() or understanding.get("template")
+                    or _pick_template(prompt))
+        if template not in TEMPLATES:
+            template = "landing"
+        spec = understanding.get("spec") or prompt
+        ref_key = understanding.get("reference", "none")
+        ref_line = ""
+        if ref_key in REFERENCES:
+            ref_line = (f"\nDesign reference ({ref_key}): match its mood, layout rhythm and "
+                        f"typography feel — {REFERENCES[ref_key]}. Do NOT copy its text or brand.")
+        # Coder model for builds (heavier than the chat model, overridable via .env).
+        model = (getattr(settings, "build_model", "") or settings.groq_model
+                 or "openai/gpt-oss-120b")
+        # Few-shot style retrieval: match the prompt against the template bank and
+        # hand the closest design system to the model. This is how a hosted model
+        # learns from examples - Groq exposes no fine-tuning API. Only used when the
+        # intake didn't already pick a REFERENCES design above.
+        ref = None
+        if ref_key == "none":
+            try:
+                cards = template_bank.load()
+                matches = template_bank.best(prompt, top=1)
+                ref = matches[0] if matches else None
+                if not ref:
+                    _log.info("style retrieval: %d cards available, no match for %r",
+                              len(cards), prompt[:60])
+            except Exception as e:
+                _log.warning("style retrieval failed: %s", type(e).__name__)
+                ref = None
+        style_block = template_bank.render(ref)
+        # Real image URLs (Serper/Brave/Pixabay/Pexels/...) so the generated page
+        # never ships links that 404.
+        try:
+            imgs = web_images.search(prompt, limit=6)
+        except Exception:
+            imgs = []
+        user_msg = (
+            f"Build {TEMPLATES[template]}.\nBuild spec (keypoints from intake analysis): {spec}\n"
+            f"Original user request: {prompt}\n"
+            f"Template: {template}.{ref_line}\nKeep it polished and responsive.")
+        if style_block:
+            user_msg += "\n\n" + style_block
+        urls = "\n".join(f"- {i.get('thumb')}" for i in imgs if i.get("thumb"))
+        if urls:
+            user_msg += "\n\nIMAGE URLS (use these, and only these, for imagery):\n" + urls
+        messages = [
+            {"role": "system", "content": _SYS},
+            {"role": "user", "content": user_msg},
+        ]
+
+        html = ""
+        await emit("phase", "generate")
+        try:
+            html = _clean(await _llm_html(messages, model, 6000))
+        except HTTPException:
+            raise
+        except Exception as e:
+            raise HTTPException(status_code=502, detail=f"Build model call failed: {type(e).__name__}")
+        # Repair pass: model left placeholders, dead image hosts, or got cut off.
+        if ("<html" not in html.lower() or "</html>" not in html.lower()
+                or _PLACEHOLDER_RE.search(html) or "via.placeholder.com" in html):
+            await emit("phase", "repair")
+            try:
+                fix = _clean(await _llm_html([
+                    {"role": "system", "content": _SYS},
+                    {"role": "user", "content": (
+                        f"Build {TEMPLATES[template]}.\nSite idea: {prompt}\nTemplate: {template}.")},
+                    {"role": "assistant", "content": html},
+                    {"role": "user", "content": "Your file has placeholder/TODO comments, a dead "
+                                                "image host (via.placeholder.com), invisible "
+                                                "content that needs JS, or is truncated — return "
+                                                "the FULL corrected single HTML file: all content "
+                                                "visible without JS, only picsum.photos/placehold."
+                                                "co/gradient images, every part implemented. HTML only."},
+                ], model, 6000))
+                if "</html>" in fix.lower():
+                    html = fix
+            except Exception:
+                pass
+        if "<html" not in html.lower():
+            raise HTTPException(status_code=502, detail="Model did not return HTML. Try again.")
+        # Missing </html> means the token budget ran out mid-document; the repair
+        # pass above already tried to fix it, so this is only a flag for the UI.
+        truncated = "</html>" not in html.lower()
+        if truncated:
+            _log.warning("build output truncated (%d chars)", len(html))
+        name = re.sub(r"[^a-z0-9]+", "-", prompt.lower()).strip("-")[:40] or "site"
+        await emit("phase", "save")
         job_id = uuid.uuid4().hex[:12]
         _JOBS[job_id] = {"name": name, "html": html, "ts": time.time()}
+        # prune old jobs
         for k in [k for k, v in _JOBS.items() if time.time() - v["ts"] > 3600]:
             _JOBS.pop(k, None)
+        # history: show builds in the usual chats menu — the sidebar marks them
+        # with the </> icon via BuildSite.is_build, no emoji prefix needed.
         try:
             user = db.query(models.User).filter_by(id=req.user_id).first()
             if not user:
@@ -350,9 +730,7 @@ async def build_website(req: BuildRequest, request: Request, db: Session = Depen
             db.commit()
             db.add(models.Message(conversation_id=conv.id, role="user", content=prompt))
             db.add(models.Message(conversation_id=conv.id, role="assistant",
-                                  content=f"Started from the **{tname}** template "
-                                          f"({tid}) — customized and ready. Open "
-                                          f"Build & Run to preview and publish."))
+                                  content=f"Built **{name}** ({template}, {(len(html) / 1024):.1f} KB). Open Build & Run to preview and download the zip."))
             db.add(models.BuildSite(conversation_id=conv.id, job_id=job_id, html=html))
             db.commit()
         except Exception:
@@ -360,142 +738,14 @@ async def build_website(req: BuildRequest, request: Request, db: Session = Depen
                 db.rollback()
             except Exception:
                 pass
-        return {"job_id": job_id, "name": name, "template": tid, "html": html,
-                "style_ref": tname, "truncated": False,
+        return {"job_id": job_id, "name": name, "template": template, "html": html,
+                "style_ref": (ref_key if ref_key in REFERENCES
+                              else (ref or {}).get("name", "")),
+                "truncated": truncated,
                 "conversation_id": conv.id if "conv" in locals() else None}
-    # Stage 1 — understand the demand before writing any code.
-    # What AZX already remembers about the user makes the spec personal
-    # ("my bakery" → knows the name, city, tone without being told again).
-    mem_ctx = ""
-    try:
-        relevant = memory_engine.retrieve_relevant(req.user_id, prompt, top_k=6)
-        mem_ctx = "\n".join(f"- {h['content']}" for h in relevant if h.get("content"))
-    except Exception:
-        mem_ctx = ""
-    try:
-        understanding = await _understand(prompt, mem_ctx)
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(status_code=502, detail=f"Understand call failed: {type(e).__name__}")
-    if not understanding["want"]:
-        return {"status": "chat", "reply": understanding["reply"]}
-    template = (req.template.strip().lower() or understanding.get("template")
-                or _pick_template(prompt))
-    if template not in TEMPLATES:
-        template = "landing"
-    spec = understanding.get("spec") or prompt
-    ref_key = understanding.get("reference", "none")
-    ref_line = ""
-    if ref_key in REFERENCES:
-        ref_line = (f"\nDesign reference ({ref_key}): match its mood, layout rhythm and "
-                    f"typography feel — {REFERENCES[ref_key]}. Do NOT copy its text or brand.")
-    # Coder model for builds (heavier than the chat model, overridable via .env).
-    model = (getattr(settings, "build_model", "") or settings.groq_model
-             or "openai/gpt-oss-120b")
-    # Few-shot style retrieval: match the prompt against the template bank and
-    # hand the closest design system to the model. This is how a hosted model
-    # learns from examples - Groq exposes no fine-tuning API. Only used when the
-    # intake didn't already pick a REFERENCES design above.
-    ref = None
-    if ref_key == "none":
-        try:
-            cards = template_bank.load()
-            matches = template_bank.best(prompt, top=1)
-            ref = matches[0] if matches else None
-            if not ref:
-                _log.info("style retrieval: %d cards available, no match for %r",
-                          len(cards), prompt[:60])
-        except Exception as e:
-            _log.warning("style retrieval failed: %s", type(e).__name__)
-            ref = None
-    style_block = template_bank.render(ref)
-    # Real image URLs (Serper/Brave/Pixabay/Pexels/...) so the generated page
-    # never ships links that 404.
-    try:
-        imgs = web_images.search(prompt, limit=6)
-    except Exception:
-        imgs = []
-    user_msg = (
-        f"Build {TEMPLATES[template]}.\nBuild spec (keypoints from intake analysis): {spec}\n"
-        f"Original user request: {prompt}\n"
-        f"Template: {template}.{ref_line}\nKeep it polished and responsive.")
-    if style_block:
-        user_msg += "\n\n" + style_block
-    urls = "\n".join(f"- {i.get('thumb')}" for i in imgs if i.get("thumb"))
-    if urls:
-        user_msg += "\n\nIMAGE URLS (use these, and only these, for imagery):\n" + urls
-    messages = [
-        {"role": "system", "content": _SYS},
-        {"role": "user", "content": user_msg},
-    ]
 
-    html = ""
-    try:
-        html = _clean(await _llm_html(messages, model, 6000))
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(status_code=502, detail=f"Build model call failed: {type(e).__name__}")
-    # Repair pass: model left placeholders, dead image hosts, or got cut off.
-    if ("<html" not in html.lower() or "</html>" not in html.lower()
-            or _PLACEHOLDER_RE.search(html) or "via.placeholder.com" in html):
-        try:
-            fix = _clean(await _llm_html([
-                {"role": "system", "content": _SYS},
-                {"role": "user", "content": (
-                    f"Build {TEMPLATES[template]}.\nSite idea: {prompt}\nTemplate: {template}.")},
-                {"role": "assistant", "content": html},
-                {"role": "user", "content": "Your file has placeholder/TODO comments, a dead "
-                                            "image host (via.placeholder.com), invisible "
-                                            "content that needs JS, or is truncated — return "
-                                            "the FULL corrected single HTML file: all content "
-                                            "visible without JS, only picsum.photos/placehold."
-                                            "co/gradient images, every part implemented. HTML only."},
-            ], model, 6000))
-            if "</html>" in fix.lower():
-                html = fix
-        except Exception:
-            pass
-    if "<html" not in html.lower():
-        raise HTTPException(status_code=502, detail="Model did not return HTML. Try again.")
-    # Missing </html> means the token budget ran out mid-document; the repair
-    # pass above already tried to fix it, so this is only a flag for the UI.
-    truncated = "</html>" not in html.lower()
-    if truncated:
-        _log.warning("build output truncated (%d chars)", len(html))
-    name = re.sub(r"[^a-z0-9]+", "-", prompt.lower()).strip("-")[:40] or "site"
-    job_id = uuid.uuid4().hex[:12]
-    _JOBS[job_id] = {"name": name, "html": html, "ts": time.time()}
-    # prune old jobs
-    for k in [k for k, v in _JOBS.items() if time.time() - v["ts"] > 3600]:
-        _JOBS.pop(k, None)
-    # history: show builds in the usual chats menu — the sidebar marks them
-    # with the </> icon via BuildSite.is_build, no emoji prefix needed.
-    try:
-        user = db.query(models.User).filter_by(id=req.user_id).first()
-        if not user:
-            user = models.User(id=req.user_id, email=f"{req.user_id}@local")
-            db.add(user)
-            db.commit()
-        conv = models.Conversation(user_id=user.id, title=name)
-        db.add(conv)
-        db.commit()
-        db.add(models.Message(conversation_id=conv.id, role="user", content=prompt))
-        db.add(models.Message(conversation_id=conv.id, role="assistant",
-                              content=f"Built **{name}** ({template}, {(len(html) / 1024):.1f} KB). Open Build & Run to preview and download the zip."))
-        db.add(models.BuildSite(conversation_id=conv.id, job_id=job_id, html=html))
-        db.commit()
-    except Exception:
-        try:
-            db.rollback()
-        except Exception:
-            pass
-    return {"job_id": job_id, "name": name, "template": template, "html": html,
-            "style_ref": (ref_key if ref_key in REFERENCES
-                          else (ref or {}).get("name", "")),
-            "truncated": truncated,
-            "conversation_id": conv.id if "conv" in locals() else None}
+    return StreamingResponse(_stream_work(_work), media_type="text/event-stream",
+                             headers=_SSE_HEADERS)
 
 
 @router.get("/conversation/{conv_id}")
@@ -543,43 +793,54 @@ _EDIT_SYS = (
 
 @router.post("/edit")
 async def build_edit(req: BuildEdit, db: Session = Depends(get_db)):
-    """Chat-style edit of the current build: "change the hero to green"."""
+    """Chat-style edit of the current build: "change the hero to green".
+
+    Streams SSE (start → tick* → done/error) so big-template edits that take
+    minutes on the fallback model survive proxy timeouts.
+    """
     job = _load_job_html(req.job_id, db)
     instruction = req.instruction.strip()
     if not instruction:
         raise HTTPException(status_code=400, detail="No instruction given.")
-    out = await _llm_html([
-        {"role": "system", "content": _EDIT_SYS},
-        {"role": "user", "content": (
-            f"CHANGE REQUEST: {instruction}\n\nCURRENT HTML:\n{job['html']}")},
-    ], "openai/gpt-oss-120b", 14000, "medium")
-    html = _clean(out)
-    if "</html>" not in html.lower():
-        raise HTTPException(status_code=502,
-                            detail="Edit came back incomplete — try a shorter instruction.")
-    _JOBS[req.job_id] = {"name": job.get("name", req.job_id), "html": html, "ts": time.time()}
-    try:
-        row = db.query(models.BuildSite).filter_by(job_id=req.job_id).first()
-        if row:
-            row.html = html
-            db.commit()
-    except Exception:
+
+    async def _work(emit) -> dict:
         try:
-            db.rollback()
-        except Exception:
-            pass
-    # keep any published copy in sync so edits show on the live URL
-    try:
-        pub = db.query(models.PublishedSite).filter_by(job_id=req.job_id).first()
-        if pub:
-            pub.html = html
-            db.commit()
-    except Exception:
+            html = await _edit_html(job["html"], instruction, "openai/gpt-oss-120b",
+                                    on_phase=lambda label: emit("phase", label))
+        except HTTPException:
+            raise
+        except Exception as e:
+            raise HTTPException(status_code=502,
+                                detail=f"Edit failed ({type(e).__name__}) — try again shortly.")
+        if "</html>" not in html.lower():
+            raise HTTPException(status_code=502,
+                                detail="Edit came back incomplete — try a shorter instruction.")
+        _JOBS[req.job_id] = {"name": job.get("name", req.job_id), "html": html, "ts": time.time()}
         try:
-            db.rollback()
+            row = db.query(models.BuildSite).filter_by(job_id=req.job_id).first()
+            if row:
+                row.html = html
+                db.commit()
         except Exception:
-            pass
-    return {"job_id": req.job_id, "html": html}
+            try:
+                db.rollback()
+            except Exception:
+                pass
+        # keep any published copy in sync so edits show on the live URL
+        try:
+            pub = db.query(models.PublishedSite).filter_by(job_id=req.job_id).first()
+            if pub:
+                pub.html = html
+                db.commit()
+        except Exception:
+            try:
+                db.rollback()
+            except Exception:
+                pass
+        return {"job_id": req.job_id, "html": html}
+
+    return StreamingResponse(_stream_work(_work), media_type="text/event-stream",
+                             headers=_SSE_HEADERS)
 
 
 class BuildPublish(BaseModel):

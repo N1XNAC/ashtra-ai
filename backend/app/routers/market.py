@@ -13,7 +13,7 @@ from fastapi import APIRouter, HTTPException
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
-from .build import _llm_html, _clean
+from .build import _llm_html, _clean, _edit_html
 
 router = APIRouter(prefix="/market", tags=["market"])
 
@@ -102,12 +102,13 @@ async def market_edit(req: MarketEdit):
         raise HTTPException(status_code=400, detail="No instruction given.")
     if not req.html.strip():
         raise HTTPException(status_code=400, detail="No HTML to edit.")
-    out = await _llm_html([
-        {"role": "system", "content": _EDIT_SYS},
-        {"role": "user", "content": (
-            f"CHANGE REQUEST: {instruction}\n\nTEMPLATE HTML:\n{req.html}")},
-    ], "openai/gpt-oss-120b", 14000, "medium")
-    html = _clean(out)
+    try:
+        html = await _edit_html(req.html, instruction, "openai/gpt-oss-120b")
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=502,
+                            detail=f"Edit failed ({type(e).__name__}) — try again shortly.")
     if "</html>" not in html.lower():
         raise HTTPException(status_code=502,
                             detail="Edit came back incomplete — try a shorter instruction.")

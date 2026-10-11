@@ -160,3 +160,18 @@ class ScheduledMsg(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
 
     user = relationship("User")
+
+
+class AnswerThread(Base):
+    # Perplexity-lite: a persisted answered question with its sources.
+    __tablename__ = "answer_threads"
+    id = Column(String, primary_key=True, default=uid)
+    user_id = Column(String, ForeignKey("users.id"), nullable=False, index=True)
+    question = Column(Text, nullable=False)
+    answer = Column(Text, nullable=False)
+    sources = Column(Text, nullable=False, default="[]")    # JSON list
+    followups = Column(Text, nullable=False, default="[]")  # JSON list
+    focus = Column(String, default="all")
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    user = relationship("User")

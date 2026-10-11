@@ -59,6 +59,8 @@ class ChatResponse(BaseModel):
     tool_calls: List[Dict[str, Any]] = []
     # Memories written this turn — surfaced in chat as "Saved to memory".
     saved: List[str] = []
+    # Study mode (/study): {"visual": [...], "flashcards": [...]} when present.
+    study: Optional[Dict[str, Any]] = None
 
 # --- Conversations (sidebar) ---
 class ConversationOut(BaseModel):

@@ -4,7 +4,7 @@ from ..database import get_db
 from .. import models, schemas
 from ..config import settings
 from ..security import check_rate, client_ip
-from ..services import ai_core, memory_engine, behavior_analyzer, personality_adapter, planner, knowledge_graph, web_images
+from ..services import ai_core, memory_engine, behavior_analyzer, personality_adapter, planner, knowledge_graph, web_images, study
 from ..services import agent as agent_exec
 from ..services.tools import due_reminders
 import asyncio
@@ -122,6 +122,46 @@ async def chat(req: schemas.ChatRequest, request: Request, db: Session = Depends
     db.commit()
     t.mark("db_conv")
 
+    # --- Slash commands: /study <topic>, /flashcards, /quiz, /visuals, /websearch ---
+    STUDY_CMDS = ("study", "flashcards", "quiz", "visuals")
+    SLASH_HELP = ("Available: /study <topic>, /flashcards [topic], "
+                  "/quiz [topic], /visuals [topic], /websearch <query>.")
+    slash_cmd, slash_arg = "", ""
+    _sm = re.match(r"^/(\w+)\s*(.*)$", (req.message or "").strip(), re.S)
+    if _sm:
+        slash_cmd, slash_arg = _sm.group(1).lower(), _sm.group(2).strip()
+    study_mode = slash_cmd == "study" and bool(slash_arg)
+    study_family = slash_cmd in STUDY_CMDS
+    is_search = slash_cmd == "websearch"
+    slash_err = ""
+    if slash_cmd == "study" and not slash_arg:
+        slash_err = ("Give me a topic: /study photosynthesis — explainer first, "
+                     "then flashcards, quiz, visuals on tap.")
+    elif slash_cmd == "websearch" and not slash_arg:
+        slash_err = ("Give me something to search: /websearch fusion power "
+                     "breakthroughs.")
+    elif slash_cmd and slash_cmd not in STUDY_CMDS and not is_search:
+        slash_err = f"Unknown command /{slash_cmd}. " + SLASH_HELP
+    # Follow-up turns borrow the topic from conversation history.
+    slash_topic = slash_arg
+    if study_family and not slash_topic:
+        slash_topic = study.resolve_topic(db, conv.id, "")
+    if study_family and slash_cmd != "study" and not slash_topic:
+        slash_err = ("No topic yet — ask /study <topic> first, or add one: "
+                     "/quiz photosynthesis.")
+    if slash_err:
+        if req.stream:
+            async def _err():
+                yield "data: " + json.dumps(
+                    {"type": "error", "detail": slash_err}, ensure_ascii=False) + "\n\n"
+            return StreamingResponse(
+                _err(), media_type="text/event-stream",
+                headers={"Cache-Control": "no-cache", "Connection": "keep-alive",
+                         "X-Accel-Buffering": "no"})
+        raise HTTPException(status_code=400, detail=slash_err)
+    # Pipeline (planner, memory, generation) works on the resolved topic.
+    gen_text = slash_topic if (study_family or is_search) else req.message
+
     # --- Phase 2: conversation retrieval + semantic memory retrieval ---
     history_rows = (
         db.query(models.Message).filter_by(conversation_id=conv.id)
@@ -129,14 +169,14 @@ async def chat(req: schemas.ChatRequest, request: Request, db: Session = Depends
     )
     history = [{"role": m.role, "content": m.content} for m in reversed(history_rows[:-1])]
 
-    relevant = memory_engine.retrieve_relevant(user.id, req.message, top_k=3)
+    relevant = memory_engine.retrieve_relevant(user.id, gen_text, top_k=3)
     memory_context = "\n".join(f"- [{h['kind']}] {h['content']}" for h in relevant if h.get("content"))
     t.mark("db_history_mem")
 
     # --- Phase 4: planner → tools (non-critical: never block the reply) ---
     tool_calls, tool_context = [], ""
     try:
-        tool_steps = planner.plan(req.message)
+        tool_steps = planner.plan(gen_text)
         if tool_steps:
             tool_calls, tool_context = agent_exec.execute_plan(db, user.id, tool_steps)
     except Exception as e:
@@ -154,7 +194,7 @@ async def chat(req: schemas.ChatRequest, request: Request, db: Session = Depends
     # --- Phase 6: observe entities into knowledge graph + surface active goals ---
     graph_ents = None
     try:
-        graph_ents = knowledge_graph.observe(user.id, req.message)
+        graph_ents = knowledge_graph.observe(user.id, gen_text)
     except Exception as e:
         log.warning("[ASHRA API] knowledge graph failed: %s", type(e).__name__)
     goals_active: list = []
@@ -171,7 +211,7 @@ async def chat(req: schemas.ChatRequest, request: Request, db: Session = Depends
     signals: dict = {}
     adaptations_made: list = []
     try:
-        signals = behavior_analyzer.analyze(req.message)
+        signals = behavior_analyzer.analyze(gen_text)
         adaptations_made = behavior_analyzer.apply_to_profile(profile, signals)
         db.commit()
     except Exception as e:
@@ -192,11 +232,38 @@ async def chat(req: schemas.ChatRequest, request: Request, db: Session = Depends
         ctx += f"\n{reminder_context}"
     if goal_context:
         ctx += f"\n{goal_context}"
+    if slash_cmd == "study":
+        ctx += "\n" + study.STUDY_SYS
+    elif slash_cmd == "flashcards":
+        ctx += "\n" + study.FC_SYS
+    elif slash_cmd == "quiz":
+        ctx += "\n" + study.QUIZ_SYS
+    elif slash_cmd == "visuals":
+        ctx += "\n" + study.VISUALS_SYS
+    # /websearch retrieves BEFORE generation — the model needs results in ctx.
+    from ..services import answer_engine
+    web_ctx, web_sources = "", []
+    if is_search:
+        try:
+            web_ctx, web_sources = await answer_engine.web_search_answer(gen_text)
+        except Exception as e:
+            log.warning("[ASHRA API] websearch retrieve failed: %s", type(e).__name__)
+        if web_sources:
+            ctx += "\n" + answer_engine.SEARCH_SYS + "\n" + web_ctx
+    # Generation budget per command (study/websearch: roomy but low-reasoning).
+    if is_search:
+        cmd_budget, cmd_reason = 600, "low"
+    elif study_family:
+        cmd_budget, cmd_reason = 800, "low"
+    else:
+        cmd_budget, cmd_reason = None, None
     t.mark("prep")  # planner + reminders + graph + goals + behaviour + prompt build
 
     # Auto-title only needs the user message — run it ALONGSIDE generation
     # instead of adding a second full LLM round-trip to the response path.
     title_task = asyncio.create_task(_auto_title(req.message)) if new_conv else None
+    # Visual gate runs ALONGSIDE generation so it's usually decided by done-time.
+    visual_task = asyncio.create_task(study.visual_needed(req.message)) if study_mode else None
 
     async def _finalize(reply: str) -> dict:
         """Post-generation work shared by the JSON and streaming paths."""
@@ -205,12 +272,86 @@ async def chat(req: schemas.ChatRequest, request: Request, db: Session = Depends
             reply = "Sorry, I couldn't generate a response. Please try again."
         if tool_calls:
             reply = reply.rstrip() + " 🔧[" + ", ".join(c["tool"] for c in tool_calls) + "]"
+        if web_sources:
+            reply = reply.rstrip() + "\n\nSources:\n" + "\n".join(
+                f"{s['n']}. [{s['title']}]({s['url']})" for s in web_sources[:5])
+        # --- Study mode: flashcards → notes (deduped), staged visuals, actions ---
+        study_blocks: dict = {}
+        study_images: list = []
+        visual_available = False
+        if slash_cmd == "study" and visual_task is not None:
+            # Staged reveal: record the verdict only — images fetch on /visuals tap.
+            try:
+                visual_available = bool(await visual_task)
+            except Exception:
+                visual_available = False
+        if slash_cmd == "visuals":
+            visual_available = True
+            cards: dict = {}
+            try:
+                reply, cards = study.extract_cards(reply)
+            except Exception as e:
+                log.warning("[ASHRA API] study cards parse failed: %s", type(e).__name__)
+            if not cards:
+                # Model answered in prose — one stern retry for the visual.
+                try:
+                    retry = await ai_core.generate_reply(
+                        f"{study.SVG_RETRY_SYS}\n\nTopic: {slash_topic or slash_arg}",
+                        ctx, history, memory_context, adaptation_text,
+                        reasoning="low", max_tokens=800)
+                    _, cards = study.extract_cards(retry)
+                    if cards:
+                        log.info("[ASHRA API] study cards recovered on retry (%d items)",
+                                 len(cards["items"]))
+                except Exception as e:
+                    log.warning("[ASHRA API] study cards retry failed: %s", type(e).__name__)
+            if not cards:
+                # Last resort: accept a free-drawn SVG if the model made one.
+                try:
+                    _, svg = study.extract_svg(reply)
+                except Exception:
+                    svg = ""
+                if svg:
+                    study_blocks["visual_svg"] = svg
+            if cards:
+                study_blocks["visual_cards"] = cards
+        if study_family:
+            expect = "quiz" if slash_cmd == "quiz" else "flashcards"
+            study_blocks["expect"] = expect
+            try:
+                _, fcs, _ = study.split_study(reply, expect=expect)
+                added = 0
+                for fc in fcs:
+                    content = f"Q: {fc['q']}\nA: {fc['a']}"
+                    exists = db.query(models.Note).filter_by(
+                        user_id=user.id, content=content).first()
+                    if exists:
+                        continue
+                    db.add(models.Note(user_id=user.id, title=f"Study: {fc['q']}"[:120],
+                                       content=content))
+                    added += 1
+                if added:
+                    db.commit()
+                if fcs:
+                    study_blocks["flashcards"] = fcs
+            except Exception as e:
+                log.warning("[ASHRA API] study notes failed: %s", type(e).__name__)
+                try:
+                    db.rollback()
+                except Exception:
+                    pass
+            if study_images:
+                study_blocks["visual"] = study_images
+            if slash_cmd == "study":
+                study_blocks["actions"] = (["flashcards", "quiz"]
+                                           + (["visuals"] if visual_available else []))
+                study_blocks["visual_available"] = visual_available
         # --- Web images: "what does a banana look like" → inline photos ---
         # Network call — keep it off the event loop so it can't stall others.
         _imgs: list = []
         try:
-            _img_q = web_images.wants_images(req.message)
-            if _img_q:
+            _img_q = web_images.wants_images(gen_text)
+            if _img_q and not study_images and not (study_family and req.stream):
                 _imgs = await asyncio.to_thread(web_images.search, _img_q)
         except Exception as e:
             log.warning("[ASHRA API] web images failed: %s", type(e).__name__)
@@ -222,8 +363,8 @@ async def chat(req: schemas.ChatRequest, request: Request, db: Session = Depends
         db.add(models.Message(conversation_id=conv.id, role="assistant", content=reply))
 
         # --- Phase 2+3: extract → score → store (SQL + Qdrant), incl. behaviour patterns ---
-        cands = memory_engine.extract_candidate_memories(req.message)
-        beh = behavior_analyzer.behaviour_memory_candidate(req.message, signals)
+        cands = memory_engine.extract_candidate_memories(gen_text)
+        beh = behavior_analyzer.behaviour_memory_candidate(gen_text, signals)
         if beh:
             cands.append(beh)
         saved: list[str] = []
@@ -239,7 +380,7 @@ async def chat(req: schemas.ChatRequest, request: Request, db: Session = Depends
             saved.append(mem.content)
             memory_engine.index_memory(mem.id, user.id, mem.content, mem.kind, mem.memory_type, mem.importance)
 
-        hints = _keyword_profile_hints(req.message)
+        hints = _keyword_profile_hints(gen_text)
         if hints:
             _apply_profile_hints(profile, hints)
             db.commit()
@@ -265,6 +406,8 @@ async def chat(req: schemas.ChatRequest, request: Request, db: Session = Depends
             "adaptations_made": adaptations_made,
             "tool_calls": tool_calls,
             "saved": saved[:3],
+            "study": study_blocks,
+            "web_sources": web_sources,
         }
 
     # --- Streaming path: first token goes out immediately, post-work after ---
@@ -274,8 +417,12 @@ async def chat(req: schemas.ChatRequest, request: Request, db: Session = Depends
             first = True
             try:
                 async for chunk in ai_core.generate_reply_stream(
-                        req.message, ctx, history, memory_context, adaptation_text,
-                        deep_thinking=bool(getattr(req, "deep_thinking", False))):
+                        gen_text, ctx, history, memory_context, adaptation_text,
+                        deep_thinking=bool(getattr(req, "deep_thinking", False)),
+                        # Study replies need room (explainer + flashcards + quiz)
+                        # but little reasoning — keep the budget for content.
+                        max_tokens=cmd_budget,
+                        reasoning=cmd_reason):
                     if first:
                         t.mark("llm_ttft")  # time to first visible token
                         first = False
@@ -288,6 +435,8 @@ async def chat(req: schemas.ChatRequest, request: Request, db: Session = Depends
                 if not parts:
                     if title_task is not None and not title_task.done():
                         title_task.cancel()
+                    if visual_task is not None and not visual_task.done():
+                        visual_task.cancel()
                     yield "data: " + json.dumps(
                         {"type": "error", "detail": str(e) or "generation failed"}) + "\n\n"
                     return
@@ -313,6 +462,20 @@ async def chat(req: schemas.ChatRequest, request: Request, db: Session = Depends
                 done_event = "data: " + json.dumps(
                     {"type": "done", "payload": {"conversation_id": conv.id, "reply": reply}},
                     ensure_ascii=False) + "\n\n"
+            if isinstance(payload, dict):
+                _st = payload.get("study", {}) or {}
+                if _st.get("visual"):
+                    yield "data: " + json.dumps(
+                        {"type": "visual", "images": _st["visual"]},
+                        ensure_ascii=False) + "\n\n"
+                if _st.get("visual_svg"):
+                    yield "data: " + json.dumps(
+                        {"type": "visual_svg", "svg": _st["visual_svg"]},
+                        ensure_ascii=False) + "\n\n"
+                if _st.get("visual_cards"):
+                    yield "data: " + json.dumps(
+                        {"type": "visual_cards", "cards": _st["visual_cards"]},
+                        ensure_ascii=False) + "\n\n"
             yield done_event
 
         return StreamingResponse(
@@ -322,8 +485,10 @@ async def chat(req: schemas.ChatRequest, request: Request, db: Session = Depends
                      "X-Accel-Buffering": "no"})
 
     # --- JSON path (original contract) ---
-    reply = await ai_core.generate_reply(req.message, ctx, history, memory_context, adaptation_text,
-                                           deep_thinking=bool(getattr(req, "deep_thinking", False)))
+    reply = await ai_core.generate_reply(gen_text, ctx, history, memory_context, adaptation_text,
+                                           deep_thinking=bool(getattr(req, "deep_thinking", False)),
+                                           max_tokens=cmd_budget,
+                                           reasoning=cmd_reason)
     t.mark("llm")
     log.info("[ASHRA API] generation completed user=%s reply_len=%d", user.id, len(reply or ""))
     return await _finalize(reply)
