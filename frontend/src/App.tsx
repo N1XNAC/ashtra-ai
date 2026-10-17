@@ -74,11 +74,19 @@ async function apiSSE(path: string, body: unknown, timeoutMs: number,
     }
   }
 }
-/* backend build phase → human label for the progress row */
+/* backend build phase → human label for the progress row (truthful: what the
+   build pipeline is actually doing right now — no fake/repeating fillers) */
 const PHASE_LABELS: Record<string, string> = {
-  plan: 'planning…', generate: 'generating code…', customize: 'customizing template…',
+  understand: 'reading your request…', plan: 'reading your request…',
+  style: 'picking design style…',
+  engine: 'prompt engine working…',
+  images: 'finding images…',
+  generate: 'writing your page…',
+  lint: 'checking links & buttons…',
+  repair: 'fixing issues…',
+  save: 'saving your site…',
+  customize: 'customizing template…',
   diff: 'writing patch…', rewrite: 'rewriting full page (slow)…',
-  repair: 'repairing…', save: 'saving…',
   understanding: 'understanding…', searching: 'searching…',
   reading: 'reading sources…', writing: 'writing answer…',
 }
@@ -147,6 +155,8 @@ const PATHS: Record<string, ReactNode> = {
   sliders: (<><path d="M4 21v-7M4 10V3M12 21v-9M12 8V3M20 21v-5M20 12V3" /><path d="M1 14h6M9 8h6M17 16h6" /></>),
   menu: (<><path d="M4 6h16M4 12h16M4 18h16" /></>),
   up: (<><path d="M12 19V5M5 12l7-7 7 7" /></>),
+  stop: (<><rect x="7" y="7" width="10" height="10" rx="2.5" fill="currentColor" stroke="none" /></>),
+  expand: (<><path d="M8 3H5a2 2 0 0 0-2 2v3" /><path d="M21 8V5a2 2 0 0 0-2-2h-3" /><path d="M16 21h3a2 2 0 0 0 2-2v-3" /><path d="M3 16v3a2 2 0 0 0 2 2h3" /></>),
   copy: (<><rect x="9" y="9" width="13" height="13" rx="2" /><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" /></>),
   chat: (<><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2Z" /></>),
   code: (<><path d="m16 18 6-6-6-6M8 6l-6 6 6 6" /></>),
@@ -296,9 +306,10 @@ function pickHome(): string[] {
 
 /* ---------- shared composer shell: Uiverse-style gradient composer,
    identical on every screen ---------- */
-function ComposerShell({ lead, field, canSend, onSend, sendLabel, head }: {
+function ComposerShell({ lead, field, canSend, onSend, sendLabel, head, streaming, onStop }: {
   lead?: ReactNode; field: ReactNode; canSend: boolean
   onSend: () => void; sendLabel: string; boxExtra?: string; head?: ReactNode
+  streaming?: boolean; onStop?: () => void
 }) {
   return (
     <div className="composer">
@@ -309,13 +320,36 @@ function ComposerShell({ lead, field, canSend, onSend, sendLabel, head }: {
             <div className="uv-chat-bot">{field}</div>
             <div className="uv-options">
               <div className="uv-btns-add">{lead}</div>
-              <button className="uv-submit" disabled={!canSend} onClick={onSend} aria-label={sendLabel}>
-                <i><Icon name="up" size={18} /></i>
-              </button>
+              {streaming ? (
+                <button className="uv-submit stop" onClick={onStop} aria-label="Stop generating">
+                  <i><Icon name="stop" size={16} /></i>
+                </button>
+              ) : (
+                <button className={`uv-submit${canSend ? ' ready' : ''}`} disabled={!canSend} onClick={onSend} aria-label={sendLabel}>
+                  <i><Icon name="up" size={18} /></i>
+                </button>
+              )}
             </div>
           </div>
         </div>
       </div>
+    </div>
+  )
+}
+
+/* ---------- liquid-glass segmented pills (aspect switcher, fullscreen) ---------- */
+function PillSeg({ options, value, onChange, ariaLabel }: {
+  options: string[]; value: string; onChange: (v: string) => void; ariaLabel?: string
+}) {
+  const i = Math.max(0, options.indexOf(value))
+  return (
+    <div className="pillseg" role="tablist" aria-label={ariaLabel}>
+      <span className="pillseg-thumb" aria-hidden
+        style={{ width: `calc((100% - 6px) / ${options.length})`, transform: `translateX(${i * 100}%)` }} />
+      {options.map(o => (
+        <button key={o} role="tab" aria-selected={o === value} className={o === value ? 'on' : ''}
+          onClick={() => onChange(o)}>{o}</button>
+      ))}
     </div>
   )
 }
@@ -542,6 +576,8 @@ function Chat({ convId, sessKey, sess, patchSess, onNewConv, refreshSidebar, onD
 }) {
   const { msgs: cached, input, busy, busyLabel, err, attach } = sess
   const [morph, setMorph] = useState(false) /* gooey send-button stretch, one shot per send */
+  const [streaming, setStreaming] = useState(false) /* send button ⇄ stop while the reply streams */
+  const abortRef = useRef<AbortController | null>(null)
   const [deep, setDeep] = useState(() => {
     try { return localStorage.getItem('ashtra-deep') === 'on' } catch { return false }
   })
@@ -641,6 +677,7 @@ function Chat({ convId, sessKey, sess, patchSess, onNewConv, refreshSidebar, onD
       }
       patchSess(key, { busyLabel: '' })
     }
+    let cap = 0
     try {
       console.log('[ASHRA] sending message')
       /* Stream first: deltas render as they arrive (TTFT ≈ first token), and the
@@ -649,10 +686,14 @@ function Chat({ convId, sessKey, sess, patchSess, onNewConv, refreshSidebar, onD
       const payload = { user_id: USER, conversation_id: convId, message: content, image_context, deep_thinking: deep }
       const sh: Record<string, string> = { 'Content-Type': 'application/json' }
       if (API_KEY) sh['X-API-Key'] = API_KEY
+      const ac = new AbortController()
+      abortRef.current = ac
+      cap = window.setTimeout(() => ac.abort(), 120000)
+      setStreaming(true)
       const r = await fetch(API + '/chat', {
         method: 'POST', headers: sh,
         body: JSON.stringify({ ...payload, stream: true }),
-        signal: AbortSignal.timeout(120000),
+        signal: ac.signal,
       })
       if (!r.ok) await throwFor(r)
       let j: ChatPayload
@@ -705,13 +746,28 @@ function Chat({ convId, sessKey, sess, patchSess, onNewConv, refreshSidebar, onD
       })
       console.log('[ASHRA] generation complete')
     } catch (e) {
-      const msg = e instanceof Error ? e.message : 'Send failed.'
-      console.log('[ASHRA ERROR]', msg)
-      patchSess(key, {
-        msgs: [...base, userMsg, { role: 'assistant', content: 'Sorry — ' + msg, fresh: true }],
-        err: msg, busy: false, busyLabel: '',
-      })
+      const aborted = (e instanceof Error || e instanceof DOMException) && e.name === 'AbortError'
+      if (aborted) {
+        /* user pressed Stop: keep the partial reply that already streamed in */
+        console.log('[ASHRA] stopped by user')
+        patchSess(key, { busy: false, busyLabel: '', err: '' })
+      } else {
+        const msg = e instanceof Error ? e.message : 'Send failed.'
+        console.log('[ASHRA ERROR]', msg)
+        patchSess(key, {
+          msgs: [...base, userMsg, { role: 'assistant', content: 'Sorry — ' + msg, fresh: true }],
+          err: msg, busy: false, busyLabel: '',
+        })
+      }
+    } finally {
+      if (cap) window.clearTimeout(cap)
+      abortRef.current = null
+      setStreaming(false)
     }
+  }
+
+  function stopGen() {
+    abortRef.current?.abort()
   }
 
   /* slash autocomplete: "/st" → [study] */
@@ -814,7 +870,8 @@ function Chat({ convId, sessKey, sess, patchSess, onNewConv, refreshSidebar, onD
             placeholder="Message AZX…  (try /study photosynthesis)" />
         }
         canSend={!(busy || cached === null || (!input.trim() && !attach))}
-        onSend={() => send()} sendLabel="Send" />
+        onSend={() => send()} sendLabel="Send"
+        streaming={streaming} onStop={stopGen} />
       }
       footer={<div className="hint">AZX can make mistakes. Memories are transparent and exportable.</div>} />
   )
@@ -981,6 +1038,9 @@ function PluginsPanel() {
 }
 
 /* ---------- build & run (AI website builder) ---------- */
+/* Real device viewport sizes (CSS px) for the preview aspect switcher —
+   the frame renders at exact 1:1 device size, scaled to fit the panel. */
+const DEV_SIZES = { mobile: [390, 844], tablet: [820, 1180], desktop: [1440, 900] } as const
 /* ---------- dark browser preview modal (shared by Build & Run + 🔨 chats).
    Traffic lights are real: red = close, yellow = minimize, green = fullscreen
    (click again to exit). External links open in a new tab instead of turning
@@ -1022,6 +1082,7 @@ function BuildPanel({ seed, onConsumed, conversationId, onBuilt, onNewBuild }: {
   const [loadingConv, setLoadingConv] = useState(!!conversationId)
   useEffect(() => {
     if (!conversationId) return
+    if (html && jobId) return /* fresh local build — keep its chat log, don't refetch/flash */
     setLoadingConv(true)
     let dead = false
     ;(async () => {
@@ -1029,6 +1090,8 @@ function BuildPanel({ seed, onConsumed, conversationId, onBuilt, onNewBuild }: {
         const d = await api(`/build/conversation/${conversationId}`, {}, 30000)
         if (dead) return
         setHtml(d.html || ''); setJobId(d.job_id || ''); setSiteName(d.name || ''); setPub(d.pub || null)
+        /* saved builds have no client log — seed one line so chat isn't empty */
+        setLog(prev => (prev.length ? prev : [`> Built: ${d.name || 'your site'}`]))
       } catch { /* no build stored */ }
       if (!dead) setLoadingConv(false)
     })()
@@ -1055,6 +1118,31 @@ function BuildPanel({ seed, onConsumed, conversationId, onBuilt, onNewBuild }: {
   const [busy, setBusy] = useState(false)
   const [editBusy, setEditBusy] = useState(false)
   const [pubBusy, setPubBusy] = useState(false)
+  /* post-build workspace: pill Chat ⇄ Preview — Preview ALWAYS opens the
+     fullscreen device overlay; closing it (X / Esc) returns to Chat */
+  const [mode, setMode] = useState<'chat' | 'preview'>('chat')
+  const [aspect, setAspect] = useState<'mobile' | 'tablet' | 'desktop'>(() => {
+    try {
+      const v = localStorage.getItem('ashtra-aspect')
+      if (v === 'mobile' || v === 'tablet' || v === 'desktop') return v
+    } catch { /* ignore */ }
+    return 'desktop'
+  })
+  useEffect(() => {
+    try { localStorage.setItem('ashtra-aspect', aspect) } catch { /* quota */ }
+  }, [aspect])
+  /* fullscreen preview: device at 1:1 scaled to the window, Esc closes */
+  const [fsScale, setFsScale] = useState(1)
+  useEffect(() => {
+    if (mode !== 'preview') return
+    const [w, h] = DEV_SIZES[aspect]
+    const fit = () => setFsScale(Math.min((window.innerWidth - 48) / w, (window.innerHeight - 120) / h, 1))
+    fit()
+    window.addEventListener('resize', fit)
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setMode('chat') }
+    window.addEventListener('keydown', onKey)
+    return () => { window.removeEventListener('resize', fit); window.removeEventListener('keydown', onKey) }
+  }, [mode, aspect])
   /* build/edit progress: elapsed timer + live phase label */
   const [phase, setPhase] = useState<string | null>(null)
   const [elapsed, setElapsed] = useState(0)
@@ -1091,10 +1179,9 @@ function BuildPanel({ seed, onConsumed, conversationId, onBuilt, onNewBuild }: {
       } catch { /* quota */ }
     }
     say(`$ ${p.length > 80 ? p.slice(0, 80) + '…' : p}`)
-    say('> coding…')
+    /* live progress = one truthful status line (phase events) — no canned
+       "coding…/polishing…" messages stacked into the log */
     startProg()
-    const t1 = setTimeout(() => say('> polishing…'), 10000)
-    const t2 = setTimeout(() => say('> final touches…'), 22000)
     try {
       const res: {
         j: { status?: string; reply?: string; job_id: string; name: string; template: string; html: string; style_ref?: string; conversation_id?: string } | null
@@ -1112,16 +1199,16 @@ function BuildPanel({ seed, onConsumed, conversationId, onBuilt, onNewBuild }: {
         say(j.reply || 'Tell me what website you want built.')
         persist({})
       } else {
-        say(`> done: ${j.name}`)
+        say(`> Built: ${j.name}`)
         persist({ html: j.html, jobId: j.job_id, name: j.name })
         setHtml(j.html); setJobId(j.job_id); setSiteName(j.name); setPub(null)
+        setMode('preview') /* fresh build → jump straight into fullscreen preview */
         if (j.conversation_id) onBuilt?.(j.conversation_id)
       }
     } catch (e) {
       say(`> error: ${e instanceof Error ? e.message : 'build failed'}`)
       persist({})
     }
-    clearTimeout(t1); clearTimeout(t2)
     stopProg()
     setBusy(false)
   }
@@ -1131,7 +1218,7 @@ function BuildPanel({ seed, onConsumed, conversationId, onBuilt, onNewBuild }: {
     if (!ins || !jobId || editBusy) return
     setEditBusy(true); setPrompt('')
     push(`$ ${ins.length > 80 ? ins.slice(0, 80) + '…' : ins}`)
-    push('> applying change…')
+    /* progress lives in the live status row (real phase events), not as log lines */
     startProg()
     try {
       const res: { html: string | null; err: string | null } = { html: null, err: null }
@@ -1143,7 +1230,7 @@ function BuildPanel({ seed, onConsumed, conversationId, onBuilt, onNewBuild }: {
       if (res.err) throw new Error(res.err)
       if (!res.html) throw new Error('edit ended without a result — try again')
       setHtml(res.html)
-      push('> updated — preview refreshed.')
+      push(`> Applied: ${ins.length > 80 ? ins.slice(0, 80) + '…' : ins}`)
     } catch (e) {
       push(`> edit failed: ${e instanceof Error ? e.message : 'error'}`)
     }
@@ -1153,11 +1240,11 @@ function BuildPanel({ seed, onConsumed, conversationId, onBuilt, onNewBuild }: {
   /* publish: make the build live at /build/site/{slug} */
   async function publish() {
     if (!jobId || pubBusy) return
-    setPubBusy(true); push('> publishing…')
+    setPubBusy(true)
     try {
       const j = await api('/build/publish', { method: 'POST', body: JSON.stringify({ job_id: jobId, user_id: USER }) }) as { slug: string; url: string; name: string }
       setPub(j)
-      push(`> live at ${j.url}`)
+      push(`> Published — live at ${j.url}`)
     } catch (e) {
       push(`> publish failed: ${e instanceof Error ? e.message : 'error'}`)
     }
@@ -1191,7 +1278,8 @@ function BuildPanel({ seed, onConsumed, conversationId, onBuilt, onNewBuild }: {
       ? { role: 'user', content: l.slice(2) }
       : { role: 'assistant', content: l })
     return (
-      <ThreadShell msgs={log.length ? msgs : []} busy={busy} status={busy && elapsed > 0 ? `Working… ${elapsed}s` : 'Working…'}
+      <ThreadShell msgs={log.length ? msgs : []} busy={busy}
+        status={busy ? `${phase ?? 'starting…'}${elapsed > 0 ? ` ${elapsed}s` : ''}` : 'Working…'}
         empty={<div className="welcome"><h1>Describe your business. Get a live site.</h1>
           <p>AZX codes it, you preview it, then publish with one click.</p></div>}
         composer={
@@ -1207,13 +1295,19 @@ function BuildPanel({ seed, onConsumed, conversationId, onBuilt, onNewBuild }: {
         } />
     )
   }
-  /* built → preview-first workspace */
-  return (
-    <div className="bwrap">
-      <div className="bprev">
-        <iframe title="preview" srcDoc={html}
-          sandbox="allow-scripts allow-same-origin allow-popups allow-popups-to-escape-sandbox" />
-      </div>
+  /* built → two-mode workspace: pill (upper middle) slides Chat ⇄ Preview */
+  const buildMsgs: Msg[] = log.map(l => l.startsWith('$ ')
+    ? { role: 'user', content: l.slice(2) }
+    : { role: 'assistant', content: l })
+  const liveStatus = `${phase ?? 'working…'}${elapsed > 0 ? ` ${elapsed}s` : ''}`
+  const siteActions = (
+    <>
+      {(busy || editBusy) && (
+        <div className="bprog">
+          <div className="bprog-top"><span>{liveStatus}</span></div>
+          <div className="bprog-track"><div className="bprog-fill" /></div>
+        </div>
+      )}
       <div className="bbar">
         <div className="bbar-meta">
           <div className="bbar-name">{siteName || 'Your site'}</div>
@@ -1221,7 +1315,7 @@ function BuildPanel({ seed, onConsumed, conversationId, onBuilt, onNewBuild }: {
             <span className="dot" />
             {pub
               ? <a href={liveUrl} target="_blank" rel="noreferrer" className="bbar-live">{liveUrl.replace(/^https?:\/\//, '')}</a>
-              : <span>Live preview</span>}
+              : <span>Ready</span>}
           </div>
         </div>
         <div className="bbar-acts">
@@ -1236,31 +1330,67 @@ function BuildPanel({ seed, onConsumed, conversationId, onBuilt, onNewBuild }: {
           }}>New build</button>
         </div>
       </div>
-      {(busy || editBusy) && (
-        <div className="bprog">
-          <div className="bprog-top"><span>{phase ?? 'working…'}</span><span>{elapsed}s</span></div>
-          <div className="bprog-track"><div className="bprog-fill" /></div>
-        </div>
-      )}
-      {(log.length > 0 || editBusy) && (
-        <div className="blog">
-          {log.slice(-6).map((l, i) => (
-            <div key={i} className={l.startsWith('$ ') ? 'blogline u' : 'blogline'}>{l}</div>
-          ))}
-          {editBusy && <div className="blogline">{'>'} applying change…</div>}
-        </div>
-      )}
-      <div className="bcomposer">
-        <ComposerShell
-          field={
-            <input id="build-edit" name="edit" value={prompt} maxLength={500}
-              onChange={e => setPrompt(e.target.value)}
-              onKeyDown={e => { if (e.key === 'Enter') editSite() }}
-              placeholder="Tell AZX what to change…" />
-          }
-          canSend={!(editBusy || !prompt.trim() || !jobId)}
-          onSend={editSite} sendLabel="Apply change" />
+    </>
+  )
+  const editComposer = (
+    <ComposerShell
+      head={siteActions}
+      field={
+        <input id="build-edit" name="edit" value={prompt} maxLength={500}
+          onChange={e => setPrompt(e.target.value)}
+          onKeyDown={e => { if (e.key === 'Enter') editSite() }}
+          placeholder="Tell AZX what to change…" />
+      }
+      canSend={!(editBusy || !prompt.trim() || !jobId)}
+      onSend={editSite} sendLabel="Apply change" />
+  )
+  return (
+    <div className="bwrap bwrap-done">
+      <div className="pillbar" role="tablist" aria-label="Workspace view">
+        <span className={`pillthumb ${mode}`} aria-hidden />
+        <button role="tab" aria-selected={mode === 'chat'} className={mode === 'chat' ? 'on' : ''}
+          onClick={() => setMode('chat')}>Chat</button>
+        <button role="tab" aria-selected={mode === 'preview'} className={mode === 'preview' ? 'on' : ''}
+          onClick={() => setMode('preview')}>Preview</button>
       </div>
+      <ThreadShell msgs={buildMsgs} busy={busy || editBusy} status={liveStatus}
+        empty={<div className="welcome">
+          <h2>Talk to AZX about your site</h2>
+          <p>Ask for changes — “make the hero darker”, “add a pricing section”, “change the brand to blue”. Hit <b>Preview</b> to see it fullscreen.</p>
+        </div>}
+        composer={<div className="bcomposer">{editComposer}</div>} />
+      {mode === 'preview' && (
+        <div className="fsprev">
+          <div className="fspill glass">
+            <PillSeg ariaLabel="Device size"
+              options={['Mobile', 'Tablet', 'Desktop']}
+              value={aspect === 'mobile' ? 'Mobile' : aspect === 'tablet' ? 'Tablet' : 'Desktop'}
+              onChange={v => setAspect(v.toLowerCase() as 'mobile' | 'tablet' | 'desktop')} />
+            <span className="aspect-dims">
+              {DEV_SIZES[aspect][0]}×{DEV_SIZES[aspect][1]}
+              {fsScale < 0.995 ? ` · ${Math.round(fsScale * 100)}%` : ''}
+            </span>
+            <button className="fs-x" onClick={() => setMode('chat')} aria-label="Close preview">
+              <Icon name="x" size={15} />
+            </button>
+          </div>
+          <div className="fsframe"
+            style={{
+              width: Math.round(DEV_SIZES[aspect][0] * fsScale),
+              height: Math.round(DEV_SIZES[aspect][1] * fsScale),
+            }}>
+            <div className={`device dev-${aspect}`}
+              style={{
+                width: DEV_SIZES[aspect][0],
+                height: DEV_SIZES[aspect][1],
+                transform: `scale(${fsScale})`,
+              }}>
+              <iframe title="fullscreen preview" srcDoc={html}
+                sandbox="allow-scripts allow-same-origin allow-popups allow-popups-to-escape-sandbox" />
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }
@@ -1861,11 +1991,16 @@ export default function App() {
         {view === 'chat' && <Chat key={sessKey} convId={convId} sessKey={sessKey} sess={sess}
           patchSess={patchSess} onNewConv={onNewConv} refreshSidebar={refreshConvs} onDraft={addDraftConv}
           isBuild={convs.find(c => c.id === convId)?.is_build ?? false}
-          goBuild={p => { setBuildSeed({ k: Date.now(), p }); setView('build') }} />}
+          goBuild={p => {
+            /* a fresh build prompt always opens a NEW Build & Run chat */
+            try { localStorage.removeItem('ashtra-build-v1') } catch { /* quota */ }
+            setBuildConvId(null)
+            setBuildSeed({ k: Date.now(), p }); setView('build')
+          }} />}
         {view === 'library' && <LibraryPanel convs={convs} convId={convId} setConvId={setConvId} setView={setView} onDelete={(id) => setConfirmDel(id)} refresh={refreshConvs} onOpenBuild={openBuildConv} />}
         {view === 'projects' && <SoonPanel title="Projects" body="Project workspaces are coming soon." />}
         {view === 'plugins' && <PluginsPanel />}
-        {view === 'build' && <BuildPanel key={`${buildSeed.k}:${buildConvId ?? ''}`} seed={buildSeed.p}
+        {view === 'build' && <BuildPanel key={buildSeed.k} seed={buildSeed.p}
           conversationId={buildConvId}
           onConsumed={() => setBuildSeed(s => ({ ...s, p: '' }))}
           onBuilt={id => { setBuildConvId(id); refreshConvs() }}
@@ -1886,8 +2021,9 @@ export default function App() {
         {view === 'settings' && <SettingsPanel fs={fs} setFs={setFs} onExport={exportChat}
           canExport={(sessions[convId ?? 'new']?.msgs ?? []).some(m => (m.content || '').trim())} />}
         {view === 'market' && <MarketPanel onUse={it => {
-          /* Use template → seed Build & Run with the template as reference */
+          /* Use template → always a NEW Build & Run chat (never the old conv) */
           try { localStorage.removeItem('ashtra-build-v1') } catch { /* quota */ }
+          setBuildConvId(null)
           setBuildSeed(s => ({ k: s.k + 1, p: `Customize the "${it.name}" template (id: ${it.id}) for my business: ` }))
           setView('build')
         }} />}

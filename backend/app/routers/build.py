@@ -23,7 +23,7 @@ from sqlalchemy.orm import Session
 from .. import models
 from ..config import settings
 from ..database import get_db
-from ..services import memory_engine, template_bank, web_images
+from ..services import memory_engine, prompt_engine, template_bank, web_images
 
 router = APIRouter(prefix="/build", tags=["build"])
 _log = logging.getLogger("ashtra.build")
@@ -42,11 +42,11 @@ _SYS = ("You are a senior front-end developer. Output ONLY a complete single HTM
         "(inline <style> and <script>; external URLs only for images and real CDN "
         "<script src> tags — never left as comments). "
         "No markdown fences, no explanations — just the HTML. "
+        "Follow the BUILD BRIEF exactly — palette, fonts, section plan, interactions — "
+        "including its DESIGN CONTRACT and FUNCTIONALITY CONTRACT. "
         "Hard rules: every section fully implemented; never leave placeholder comments, "
         "TODOs, or empty script blocks — if a chart, animation, or function is required, "
         "write the real working code; responsive on mobile; visually polished. "
-        "When a DESIGN REFERENCE is given, adopt its palette, type, spacing and section "
-        "rhythm, but write original markup and copy for the requested site. "
         "BLANK-PAGE RULES (critical): (1) All main content must be fully visible WITHOUT "
         "JavaScript — never start sections at opacity:0 or off-screen transforms waiting "
         "for a script; JS may only enhance already-visible content. (2) Set an explicit "
@@ -65,6 +65,76 @@ _PLACEHOLDER_RE = re.compile(
     r"implementation (goes|here)|add (your|the) (code|content|chart) (here|below)|"
     r"placeholder (code|script|content)|inside this script block)",
     re.IGNORECASE)
+
+# onclick="fn(" / onsubmit="fn(" → the function name that must exist in script.
+_ONATTR_RE = re.compile(r"on(?:click|submit|change|input|mouseover)=\"\s*"
+                        r"([A-Za-z_$][\w$]*)\s*\(")
+_JS_KEYWORDS = frozenset({"this", "event", "window", "document", "alert",
+                          "confirm", "prompt", "console", "return", "if"})
+
+
+def _auto_fix(html: str) -> str:
+    """Deterministic fixes that need no model: dead hrefs become a working
+    scroll-to-top anchor (id=\"top\" injected once when missing)."""
+    if not html:
+        return html
+    if re.search(r'href="#"', html) or re.search(r'href=""', html):
+        html = re.sub(r'href="#"', 'href="#top"', html)
+        html = re.sub(r'href=""', 'href="#top"', html)
+        if 'id="top"' not in html and "id='top'" not in html:
+            html = re.sub(r"(<body[^>]*>)", r'\1<span id="top"></span>',
+                          html, count=1, flags=re.I)
+    return html
+
+
+def _lint_html(html: str) -> list[str]:
+    """Deterministic QA of a built page — no model cost. Returns the exact
+    violations to hand the repair pass; [] means ship it."""
+    text = html or ""
+    low = text.lower()
+    if "<html" not in low:
+        return ["output is not an HTML document (no <html> root)"]
+    problems: list[str] = []
+    if "</html>" not in low:
+        problems.append("document truncated — missing </html>")
+    if _PLACEHOLDER_RE.search(text):
+        problems.append("placeholder/TODO comments left in the code")
+    if "via.placeholder.com" in low:
+        problems.append("dead image host via.placeholder.com")
+    # Fragment links must land on real sections; no dead hrefs.
+    ids = set(re.findall(r'id="([^"]+)"', text))
+    missing = sorted({h for h in re.findall(r'href="#([^"]+)"', text)
+                      if h and h not in ids})
+    if missing:
+        problems.append("links to missing sections: " + ", ".join(missing[:6]))
+    if re.search(r'href="#"', text) or re.search(r'href=""', text):
+        problems.append('dead link (href="#" or empty href)')
+    # Inline handlers must call functions the page actually defines.
+    called = {m for m in _ONATTR_RE.findall(text)} - _JS_KEYWORDS
+    if called:
+        defined = set(re.findall(r"function\s+([A-Za-z_$][\w$]*)\s*\(", text))
+        defined |= set(re.findall(r"(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*"
+                                  r"(?:async\s+)?(?:function|\()", text))
+        undef = sorted(called - defined)
+        if undef:
+            problems.append("calls undefined function(s): " + ", ".join(undef[:6]))
+    # Plain buttons with no type/handler, and nothing in the page wires button
+    # clicks at all → decorative-only buttons (the contract bans those).
+    btn_tags = re.findall(r"<button\b[^>]*>", text, re.I)
+    plain = [b for b in btn_tags
+             if "onclick=" not in b.lower() and "type=" not in b.lower()]
+    wired = (bool(re.search(r"addEventListener\(\s*['\"]click|\.onclick\s*=", text, re.I))
+             or any("onclick=" in b.lower() for b in btn_tags))
+    if plain and not wired:
+        problems.append(f"{len(plain)} button(s) do nothing — no handler, no type")
+    # Forms need a real submit path: onsubmit, a submit listener, or an action.
+    for fm in re.finditer(r"<form\b[^>]*>", text, re.I):
+        tag = fm.group(0).lower()
+        if "onsubmit=" not in tag and "action=" not in tag \
+                and not re.search(r"addEventListener\(\s*['\"]submit", text, re.I):
+            problems.append("form has no submit handling")
+            break
+    return problems
 
 
 def _pick_template(prompt: str) -> str:
@@ -337,12 +407,16 @@ async def _llm_html(messages: list[dict], model: str, max_tokens: int, effort: s
     OpenRouter big-context chain instead of exploding into a 500.
     """
     input_chars = sum(len(m.get("content") or "") for m in messages)
-    # Groq free org ≈8k TPM shared with chat — only route when input+output fits.
-    # Diff calls (small max_tokens) fail fast to the chain instead of sleeping.
-    if input_chars / 3.4 + max_tokens <= _GROQ_TPM_BUDGET:
+    est = input_chars / 3.4 + max_tokens
+    # Groq free org ≈8k TPM shared with chat — only route when input+output fits
+    # the budget. Exception: from-scratch generates (small input, big output)
+    # ALWAYS try Groq first — it's 10-20x faster than the OpenRouter free
+    # chain — and fail fast (no patient retry) into the chain on 429. Huge
+    # edit payloads (>15KB input) still skip Groq: the free org 413s them.
+    if est <= _GROQ_TPM_BUDGET or (max_tokens > 3000 and input_chars < 15000):
         try:
             return await _groq_html(messages, model, max_tokens, effort,
-                                    patient=max_tokens > 3000)
+                                    patient=est <= _GROQ_TPM_BUDGET)
         except _PayloadTooLarge:
             pass  # bigger than it looked — big-context chain
         except HTTPException:
@@ -556,6 +630,8 @@ async def build_website(req: BuildRequest, request: Request, db: Session = Depen
                 r"(?is)^\s*customize the .*?template\s*\(id:\s*template-\d+\)\s*"
                 r"for my business\s*:?\s*",
                 "", prompt).strip()
+            model = (getattr(settings, "build_model", "") or settings.groq_model
+                     or "openai/gpt-oss-120b")
             if custom:
                 # absolute base so assets/ resolve in srcDoc preview AND /build/site/{slug}
                 base = f'<base href="{str(request.base_url).rstrip("/")}/market/file/{tid}/">'
@@ -564,8 +640,6 @@ async def build_website(req: BuildRequest, request: Request, db: Session = Depen
                         html = re.sub(r"(<head[^>]*>)", r"\1" + base, html, count=1, flags=re.I)
                     else:
                         html = base + html
-                model = (getattr(settings, "build_model", "") or settings.groq_model
-                         or "openai/gpt-oss-120b")
             try:
                 cand = await _edit_html(html, custom, model,
                                         on_phase=lambda label: emit("phase", label))
@@ -577,6 +651,28 @@ async def build_website(req: BuildRequest, request: Request, db: Session = Depen
             except Exception as e:
                 _log.warning("template customize failed (%s) — serving exact template",
                              type(e).__name__)
+            # QA gate for the template path: fix exact violations when cheap;
+            # never accept a fix that leaves more problems than it started with.
+            html = _auto_fix(html)
+            _tpl_v = _lint_html(html)
+            if _tpl_v:
+                await emit("phase", "lint")
+                try:
+                    _fix = _auto_fix(_clean(await _llm_html([
+                        {"role": "system", "content": _SYS},
+                        {"role": "assistant", "content": html},
+                        {"role": "user", "content": "QA found violations:\n- "
+                         + "\n- ".join(_tpl_v) + "\nReturn the FULL corrected single HTML "
+                                                 "file (no fences, no commentary). If you "
+                                                 "cannot fix them all, return it unchanged."},
+                    ], model, 6000)))
+                    if ("</html>" in _fix.lower() and "<html" in _fix.lower()
+                            and len(_lint_html(_fix)) < len(_tpl_v)):
+                        html = _fix
+                except Exception:
+                    pass
+                if _lint_html(html):
+                    _log.warning("template lint residual: %s", _lint_html(html)[:5])
             name = re.sub(r"[^a-z0-9]+", "-", (custom or tname).lower()).strip("-")[:40] or "site"
             job_id = uuid.uuid4().hex[:12]
             _JOBS[job_id] = {"name": name, "html": html, "ts": time.time()}
@@ -615,7 +711,7 @@ async def build_website(req: BuildRequest, request: Request, db: Session = Depen
             mem_ctx = "\n".join(f"- {h['content']}" for h in relevant if h.get("content"))
         except Exception:
             mem_ctx = ""
-        await emit("phase", "plan")
+        await emit("phase", "understand")
         try:
             understanding = await _understand(prompt, mem_ctx)
         except HTTPException:
@@ -641,6 +737,7 @@ async def build_website(req: BuildRequest, request: Request, db: Session = Depen
         # hand the closest design system to the model. This is how a hosted model
         # learns from examples - Groq exposes no fine-tuning API. Only used when the
         # intake didn't already pick a REFERENCES design above.
+        await emit("phase", "style")
         ref = None
         if ref_key == "none":
             try:
@@ -654,18 +751,36 @@ async def build_website(req: BuildRequest, request: Request, db: Session = Depen
                 _log.warning("style retrieval failed: %s", type(e).__name__)
                 ref = None
         style_block = template_bank.render(ref)
-        # Real image URLs (Serper/Brave/Pixabay/Pexels/...) so the generated page
-        # never ships links that 404.
+        # Prompt engine: raw words + keypoints + memory + style → BUILD BRIEF
+        # (palette, fonts, section plan, interactions). The light call never
+        # blocks a build — compose() falls back to neutral-premium internally.
+        await emit("phase", "engine")
+        brief = await prompt_engine.compose(
+            prompt, spec=spec, mem_ctx=mem_ctx,
+            style_block=style_block or ref_line,
+            llm=lambda msgs: _llm_html(msgs, "openai/gpt-oss-20b", 1000, "low"))
+        brief_text = prompt_engine.render(brief)
+        # Real image URLs so the generated page never ships links that 404 —
+        # the brief's imagery query targets this site's actual subject.
+        await emit("phase", "images")
+        img_q = str(brief.get("imagery") or "").strip() or prompt
         try:
-            imgs = web_images.search(prompt, limit=6)
+            imgs = web_images.search(img_q, limit=6)
+            if not imgs and img_q != prompt:
+                imgs = web_images.search(prompt, limit=6)
         except Exception:
             imgs = []
         user_msg = (
-            f"Build {TEMPLATES[template]}.\nBuild spec (keypoints from intake analysis): {spec}\n"
+            f"Build {TEMPLATES[template]}.\n\n{brief_text}\n\n"
             f"Original user request: {prompt}\n"
-            f"Template: {template}.{ref_line}\nKeep it polished and responsive.")
+            f"Template: {template}.\nKeep it polished and responsive.")
         if style_block:
             user_msg += "\n\n" + style_block
+        if ref_line:
+            user_msg += ref_line
+        if style_block or ref_line:
+            user_msg += ("\nMood only: the BUILD BRIEF above owns the palette, fonts "
+                         "and section plan — the reference just sets character.")
         urls = "\n".join(f"- {i.get('thumb')}" for i in imgs if i.get("thumb"))
         if urls:
             user_msg += "\n\nIMAGE URLS (use these, and only these, for imagery):\n" + urls
@@ -677,36 +792,45 @@ async def build_website(req: BuildRequest, request: Request, db: Session = Depen
         html = ""
         await emit("phase", "generate")
         try:
-            html = _clean(await _llm_html(messages, model, 6000))
+            html = _auto_fix(_clean(await _llm_html(messages, model, 6000)))
         except HTTPException:
             raise
         except Exception as e:
             raise HTTPException(status_code=502, detail=f"Build model call failed: {type(e).__name__}")
-        # Repair pass: model left placeholders, dead image hosts, or got cut off.
-        if ("<html" not in html.lower() or "</html>" not in html.lower()
-                or _PLACEHOLDER_RE.search(html) or "via.placeholder.com" in html):
-            await emit("phase", "repair")
-            try:
-                fix = _clean(await _llm_html([
-                    {"role": "system", "content": _SYS},
-                    {"role": "user", "content": (
-                        f"Build {TEMPLATES[template]}.\nSite idea: {prompt}\nTemplate: {template}.")},
-                    {"role": "assistant", "content": html},
-                    {"role": "user", "content": "Your file has placeholder/TODO comments, a dead "
-                                                "image host (via.placeholder.com), invisible "
-                                                "content that needs JS, or is truncated — return "
-                                                "the FULL corrected single HTML file: all content "
-                                                "visible without JS, only picsum.photos/placehold."
-                                                "co/gradient images, every part implemented. HTML only."},
-                ], model, 6000))
-                if "</html>" in fix.lower():
-                    html = fix
-            except Exception:
-                pass
         if "<html" not in html.lower():
             raise HTTPException(status_code=502, detail="Model did not return HTML. Try again.")
-        # Missing </html> means the token budget ran out mid-document; the repair
-        # pass above already tried to fix it, so this is only a flag for the UI.
+        # QA gate: deterministic lint → targeted repair (exact violations,
+        # max 2 passes) — keep whichever attempt has the fewest problems.
+        await emit("phase", "lint")
+        best_html, best_v = html, _lint_html(html)
+        for _pass in range(2):
+            if not best_v:
+                break
+            n = len(best_v)
+            await emit("phase",
+                       (f"fixing {n} issue{'s' if n != 1 else ''}…" if _pass == 0
+                        else "final quality pass…"))
+            try:
+                cand = _auto_fix(_clean(await _llm_html([
+                    {"role": "system", "content": _SYS},
+                    {"role": "assistant", "content": best_html},
+                    {"role": "user", "content": "QA found violations:\n- "
+                     + "\n- ".join(best_v) + "\nReturn the FULL corrected single HTML "
+                                             "file — no fences, no commentary. Fix every "
+                                             "violation; keep everything else identical."},
+                ], model, 6000)))
+            except Exception:
+                continue
+            if "<html" not in cand.lower() or "</html>" not in cand.lower():
+                continue
+            cand_v = _lint_html(cand)
+            if len(cand_v) < len(best_v):
+                best_html, best_v = cand, cand_v
+        html = best_html
+        if best_v:
+            _log.warning("build lint residual (%d): %s", len(best_v), best_v[:5])
+        # Missing </html> means the token budget ran out mid-document and the
+        # repair passes couldn't fix it — only a flag for the UI.
         truncated = "</html>" not in html.lower()
         if truncated:
             _log.warning("build output truncated (%d chars)", len(html))
