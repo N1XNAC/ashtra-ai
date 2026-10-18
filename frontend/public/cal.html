@@ -1,0 +1,68 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>cal</title>
+<style>
+  html, body { margin: 0; background: #444; }
+  #f { position: absolute; border: 0; background: #fff; }
+</style></head><body>
+<iframe id="f" src="/" scrolling="no"></iframe>
+<script>
+  /* Screenshot calibration harness (dev-only).
+     Renders the app at an exact CSS-pixel viewport inside headless Chrome's
+     clamped window, centered so a final center-crop equals the requested
+     viewport. Optional same-origin actions run inside the app frame:
+       q=<text>      type into the composer
+       enter=1       press Enter (send)
+       ctext=<words> click the first button containing the words
+       click=<sel>   click a CSS selector inside the app
+       wait=<ms>     extra settle time before capture (default 9000 virtual ms) */
+  const q = new URLSearchParams(location.search)
+  const W = +(q.get('W') || 560), H = +(q.get('H') || 1000)
+  const fit = q.get('fit') === '1'
+  let w = +(q.get('w') || 390), h = +(q.get('h') || 844)
+  if (fit) { w = Math.min(w, window.innerWidth - 40); h = Math.min(h, window.innerHeight - 40) }
+  const f = document.getElementById('f')
+  f.style.width = w + 'px'
+  f.style.height = h + 'px'
+  f.style.left = Math.round((window.innerWidth - w) / 2) + 'px'
+  f.style.top = Math.round((window.innerHeight - h) / 2) + 'px'
+  window.addEventListener('load', () => setTimeout(() => {
+    try {
+      const d = f.contentDocument
+      document.title = 'win=' + window.innerWidth + 'x' + window.innerHeight + ' app=' + w + 'x' + h +
+        ' appScrollW=' + d.documentElement.scrollWidth + ' appClientW=' + d.documentElement.clientWidth
+    } catch (e) { document.title = 'ERR' }
+  }, 2500))
+
+  const frame = () => f.contentDocument
+  const clickByText = words => {
+    const d = frame()
+    if (!d) return false
+    const btns = [...d.querySelectorAll('button, [role="button"]')]
+    const b = btns.find(x => (x.textContent || '').includes(words))
+    if (b) { b.click(); return true }
+    return false
+  }
+  const typeText = txt => {
+    const d = frame()
+    const ta = d && d.querySelector('.uv-chat textarea')
+    if (!ta) return false
+    const set = Object.getOwnPropertyDescriptor(f.contentWindow.HTMLTextAreaElement.prototype, 'value').set
+    set.call(ta, txt)
+    ta.dispatchEvent(new f.contentWindow.Event('input', { bubbles: true }))
+    return true
+  }
+  const pressEnter = () => {
+    const d = frame()
+    const ta = d && d.querySelector('.uv-chat textarea')
+    if (!ta) return false
+    ta.dispatchEvent(new f.contentWindow.KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }))
+    return true
+  }
+  window.addEventListener('load', () => {
+    setTimeout(() => { if (q.get('click')) { const d = frame(); d && d.querySelector(q.get('click'))?.click() } }, 2200)
+    setTimeout(() => { if (q.get('ctext')) clickByText(q.get('ctext')) }, 2700)
+    setTimeout(() => { if (q.get('q')) typeText(q.get('q')) }, 3200)
+    setTimeout(() => { if (q.get('enter')) pressEnter() }, 3800)
+  })
+</script>
+</body></html>

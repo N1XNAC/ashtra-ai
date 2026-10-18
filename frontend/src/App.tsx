@@ -162,6 +162,8 @@ const PATHS: Record<string, ReactNode> = {
   code: (<><path d="m16 18 6-6-6-6M8 6l-6 6 6 6" /></>),
   calendar: (<><rect x="3" y="4" width="18" height="18" rx="2" /><path d="M16 2v4M8 2v4M3 10h18" /></>),
   plus: (<><path d="M12 5v14M5 12h14" /></>),
+  mic: (<><rect x="9" y="2.5" width="6" height="11" rx="3" /><path d="M5 11a7 7 0 0 0 14 0" /><path d="M12 18v3.5" /></>),
+  globe: (<><circle cx="12" cy="12" r="9" /><path d="M3 12h18" /><path d="M12 3a14.5 14.5 0 0 1 0 18 14.5 14.5 0 0 1 0-18" /></>),
   image: (<><rect x="3" y="3" width="18" height="18" rx="2" /><circle cx="9" cy="9" r="2" /><path d="m21 15-5-5L5 21" /></>),
   search: (<><circle cx="11" cy="11" r="7" /><path d="m20 20-3.8-3.8" /></>),
   x: (<><path d="M6 6l12 12M18 6 6 18" /></>),
@@ -279,56 +281,93 @@ function ConfirmDialog({ title, body, confirmLabel, onConfirm, onCancel }: {
 
 /* ---------- chat ---------- */
 /* Home suggestions route straight into Build & Run — that's the product loop. */
-const SUGGESTIONS: { t: string; s: string }[] = [
-  { t: 'Build a business website', s: 'Describe your business — get a live site' },
-  { t: 'Create a portfolio', s: 'Show your work in one page' },
-  { t: 'Make a landing page', s: 'One focused page that converts' },
-]
-/* Quick slash presets fill the composer instead of navigating away. */
-const QUICK_ACTIONS: { t: string; s: string; fill: string }[] = [
-  { t: '/study', s: 'Learn anything, with visuals', fill: '/study ' },
-  { t: '/websearch', s: 'Search the web with sources', fill: '/websearch ' },
-  { t: '/quiz', s: 'Test yourself on a topic', fill: '/quiz ' },
-]
-/* Home shows 3 of the 6 options, reshuffled on every page load. */
-let homePick: string[] | null = null
-function pickHome(): string[] {
-  if (!homePick) {
-    const ids = [...SUGGESTIONS.map(s => s.t), ...QUICK_ACTIONS.map(s => s.t)]
-    for (let i = ids.length - 1; i > 0; i--) {
-      const j = Math.floor(Math.random() * (i + 1))
-      ;[ids[i], ids[j]] = [ids[j], ids[i]]
-    }
-    homePick = ids.slice(0, 3)
-  }
-  return homePick
+/* Home 2x2 action grid — REAL AZX features only (reference geometry, honest labels).
+   Build & Run stays discoverable here and in the drawer; no invented features. */
+const HOME_ACTIONS = [
+  { icon: 'code', label: 'Build & Run', act: 'build' },
+  { icon: 'globe', label: 'Web Search', act: '/websearch ' },
+  { icon: 'books', label: 'Study & Learn', act: '/study ' },
+  { icon: 'search', label: 'Answers', act: 'answer' },
+] as const
+
+/* assistant identity orb — home + empty states (real SVG, no image asset) */
+function Orb() {
+  return (
+    <div className="orb" aria-hidden="true">
+      <svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 2c.7 5.1 4.2 8.6 9.3 9.3-5.1.7-8.6 4.2-9.3 9.3-.7-5.1-4.2-8.6-9.3-9.3C7.8 10.6 11.3 7.1 12 2Z" /></svg>
+    </div>
+  )
 }
 
-/* ---------- shared composer shell: Uiverse-style gradient composer,
-   identical on every screen ---------- */
-function ComposerShell({ lead, field, canSend, onSend, sendLabel, head, streaming, onStop }: {
+/* ---------- shared composer shell: black pill control row,
+   identical on every screen — plus · input · mic · send ---------- */
+
+/* real dictation via the browser Web Speech API (no fake loading states);
+   the button only renders where the API actually exists */
+type DictationCtor = new () => {
+  lang: string; interimResults: boolean; maxAlternatives: number
+  onresult: ((e: { results: { [i: number]: { [j: number]: { transcript: string } } } }) => void) | null
+  onerror: (() => void) | null
+  onend: (() => void) | null
+  start: () => void; stop: () => void
+}
+function useDictation(onText: (t: string) => void) {
+  const [listening, setListening] = useState(false)
+  const recRef = useRef<InstanceType<DictationCtor> | null>(null)
+  const w = typeof window !== 'undefined'
+    ? window as unknown as { SpeechRecognition?: DictationCtor; webkitSpeechRecognition?: DictationCtor }
+    : undefined
+  const Ctor = w?.SpeechRecognition ?? w?.webkitSpeechRecognition
+  useEffect(() => () => { try { recRef.current?.stop() } catch { /* ignore */ } }, [])
+  const toggle = () => {
+    if (!Ctor) return
+    if (listening) { try { recRef.current?.stop() } catch { /* ignore */ } setListening(false); return }
+    const rec = new Ctor()
+    rec.lang = navigator.language || 'en-US'
+    rec.interimResults = false
+    rec.maxAlternatives = 1
+    rec.onresult = e => { const t = e?.results?.[0]?.[0]?.transcript; if (t) onText(t) }
+    rec.onerror = () => setListening(false)
+    rec.onend = () => setListening(false)
+    recRef.current = rec
+    setListening(true)
+    try { rec.start() } catch { setListening(false) }
+  }
+  return { supported: !!Ctor, listening, toggle }
+}
+
+function ComposerShell({ lead, field, canSend, onSend, sendLabel, head, streaming, onStop, onVoice }: {
   lead?: ReactNode; field: ReactNode; canSend: boolean
   onSend: () => void; sendLabel: string; boxExtra?: string; head?: ReactNode
-  streaming?: boolean; onStop?: () => void
+  streaming?: boolean; onStop?: () => void; onVoice?: (transcript: string) => void
 }) {
+  const dictation = useDictation(t => onVoice?.(t))
   return (
     <div className="composer">
       {head}
       <div className="uv-chatbot">
         <div className="uv-chat-options">
           <div className="uv-chat">
+            <div className="uv-btns-add uv-lead">{lead}</div>
             <div className="uv-chat-bot">{field}</div>
             <div className="uv-options">
-              <div className="uv-btns-add">{lead}</div>
+              {onVoice && dictation.supported && (
+                <button type="button" className={`uv-mic${dictation.listening ? ' on' : ''}`}
+                  aria-pressed={dictation.listening}
+                  aria-label={dictation.listening ? 'Stop dictation' : 'Dictate with your voice'}
+                  onClick={dictation.toggle}>
+                  <i><Icon name={dictation.listening ? 'stop' : 'mic'} size={17} /></i>
+                </button>
+              )}
               {streaming ? (
                 <button className="uv-submit stop" onClick={onStop} aria-label="Stop generating">
                   <i><Icon name="stop" size={16} /></i>
                 </button>
-              ) : (
-                <button className={`uv-submit${canSend ? ' ready' : ''}`} disabled={!canSend} onClick={onSend} aria-label={sendLabel}>
+              ) : canSend ? (
+                <button className="uv-submit ready" onClick={onSend} aria-label={sendLabel}>
                   <i><Icon name="up" size={18} /></i>
                 </button>
-              )}
+              ) : null /* empty state matches the reference: mic only, no dimmed send */}
             </div>
           </div>
         </div>
@@ -568,11 +607,12 @@ function AssistantBody({ m, onAction }: { m: Msg; onAction: (cmd: string) => voi
   </>)
 }
 
-function Chat({ convId, sessKey, sess, patchSess, onNewConv, refreshSidebar, onDraft, isBuild, goBuild }: {
+function Chat({ convId, sessKey, sess, patchSess, onNewConv, refreshSidebar, onDraft, isBuild, goBuild, name, onAnswer }: {
   convId: string | null; sessKey: string; sess: Sess
   patchSess: (key: string, p: Partial<Sess>) => void
   onNewConv: (id: string) => void; refreshSidebar: () => void; onDraft: (title: string) => void
   isBuild?: boolean; goBuild: (prompt: string) => void
+  name?: string; onAnswer?: () => void
 }) {
   const { msgs: cached, input, busy, busyLabel, err, attach } = sess
   const [morph, setMorph] = useState(false) /* gooey send-button stretch, one shot per send */
@@ -779,29 +819,25 @@ function Chat({ convId, sessKey, sess, patchSess, onNewConv, refreshSidebar, onD
     requestAnimationFrame(() => { taRef.current?.focus(); autosize() })
   }
 
+  function runHome(act: string) {
+    if (act === 'build') { goBuild(''); return }
+    if (act === 'answer') { onAnswer?.(); return }
+    patchSess(sessKey, { input: act })
+    requestAnimationFrame(() => { taRef.current?.focus(); autosize() })
+  }
+  const who = (name ?? '').trim() || 'there'
   const welcome = (
     <div className="welcome">
-      <h1>What are we building today?</h1>
-      <p>Describe your business. Get a live site.</p>
-      <div className="suggest">
-        {pickHome().map(t => {
-          const b = SUGGESTIONS.find(s => s.t === t)
-          if (b) return (
-            <button key={t} className="sug" onClick={() => goBuild(b.t)}>
-              <span>{b.t}<small>{b.s}</small></span>
-            </button>
-          )
-          const q = QUICK_ACTIONS.find(s => s.t === t)
-          if (q) return (
-            <button key={t} className="sug" onClick={() => {
-              patchSess(sessKey, { input: q.fill })
-              requestAnimationFrame(() => { taRef.current?.focus(); autosize() })
-            }}>
-              <span>{q.t}<small>{q.s}</small></span>
-            </button>
-          )
-          return null
-        })}
+      <Orb />
+      <h1>Hi {who}, how can I help you today?</h1>
+      <div className="wspace" />
+      <div className="suggest" role="list">
+        {HOME_ACTIONS.map(a => (
+          <button key={a.label} className="sug" role="listitem" onClick={() => runHome(a.act)}>
+            <span className="sug-ic"><Icon name={a.icon} size={18} /></span>
+            <span>{a.label}</span>
+          </button>
+        ))}
       </div>
     </div>
   )
@@ -867,11 +903,16 @@ function Chat({ convId, sessKey, sess, patchSess, onNewConv, refreshSidebar, onD
               }
               if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send() }
             }}
-            placeholder="Message AZX…  (try /study photosynthesis)" />
+            placeholder="Ask anything…" />
         }
         canSend={!(busy || cached === null || (!input.trim() && !attach))}
         onSend={() => send()} sendLabel="Send"
-        streaming={streaming} onStop={stopGen} />
+        streaming={streaming} onStop={stopGen}
+        onVoice={t => {
+          const cur = input.trimEnd()
+          patchSess(sessKey, { input: (cur ? cur + ' ' : '') + t })
+          requestAnimationFrame(() => { taRef.current?.focus(); autosize() })
+        }} />
       }
       footer={<div className="hint">AZX can make mistakes. Memories are transparent and exportable.</div>} />
   )
@@ -1280,8 +1321,11 @@ function BuildPanel({ seed, onConsumed, conversationId, onBuilt, onNewBuild }: {
     return (
       <ThreadShell msgs={log.length ? msgs : []} busy={busy}
         status={busy ? `${phase ?? 'starting…'}${elapsed > 0 ? ` ${elapsed}s` : ''}` : 'Working…'}
-        empty={<div className="welcome"><h1>Describe your business. Get a live site.</h1>
-          <p>AZX codes it, you preview it, then publish with one click.</p></div>}
+        empty={<div className="welcome">
+          <Orb />
+          <h1>Describe your business. Get a live site.</h1>
+          <p>AZX codes it, you preview it, then publish with one click.</p>
+        </div>}
         composer={
           <ComposerShell
             field={
@@ -1291,7 +1335,8 @@ function BuildPanel({ seed, onConsumed, conversationId, onBuilt, onNewBuild }: {
                 placeholder="e.g. bakery website for Nix Bakes in Pune…" />
             }
             canSend={!(busy || !prompt.trim())}
-            onSend={run} sendLabel="Build" />
+            onSend={run} sendLabel="Build"
+            onVoice={t => setPrompt(p => (p.trimEnd() ? p.trimEnd() + ' ' : '') + t)} />
         } />
     )
   }
@@ -1342,7 +1387,8 @@ function BuildPanel({ seed, onConsumed, conversationId, onBuilt, onNewBuild }: {
           placeholder="Tell AZX what to change…" />
       }
       canSend={!(editBusy || !prompt.trim() || !jobId)}
-      onSend={editSite} sendLabel="Apply change" />
+      onSend={editSite} sendLabel="Apply change"
+      onVoice={t => setPrompt(p => (p.trimEnd() ? p.trimEnd() + ' ' : '') + t)} />
   )
   return (
     <div className="bwrap bwrap-done">
@@ -1991,6 +2037,7 @@ export default function App() {
         {view === 'chat' && <Chat key={sessKey} convId={convId} sessKey={sessKey} sess={sess}
           patchSess={patchSess} onNewConv={onNewConv} refreshSidebar={refreshConvs} onDraft={addDraftConv}
           isBuild={convs.find(c => c.id === convId)?.is_build ?? false}
+          name={userName} onAnswer={() => setView('answer')}
           goBuild={p => {
             /* a fresh build prompt always opens a NEW Build & Run chat */
             try { localStorage.removeItem('ashtra-build-v1') } catch { /* quota */ }
