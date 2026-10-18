@@ -1113,7 +1113,8 @@ function Sidebar({ view, setView, convId, setConvId, convs, onNew, onDelete, onD
     if (n.size === 0) setSelMode(false)
     return n
   })
-  const go = (v: View) => { setView(v); close() }
+  const closeIfMobile = () => { if (window.innerWidth <= 760) close() }
+  const go = (v: View) => { setView(v); closeIfMobile() }
   /* desktop nav rows: icon + label + optional right chevron (per AZX spec) */
   const row = (label: string, icon: keyof typeof PATHS, active: boolean, onClick: () => void, chev = true, cls = '') => (
     <button key={label} className={`mrow ${cls}${active ? ' on' : ''}`} onClick={onClick}>
@@ -1134,7 +1135,7 @@ function Sidebar({ view, setView, convId, setConvId, convs, onNew, onDelete, onD
           </div>
         </div>
         <nav className="mnav">
-          {row('New chat', 'pen', false, () => { onNew(); close() }, false, 'nav-newchat')}
+          {row('New chat', 'pen', false, () => { onNew(); closeIfMobile() }, false, 'nav-newchat')}
           {row('Home', 'home', view === 'chat', () => { setConvId(null); go('chat') }, false)}
           {row('Build & Run', 'code', view === 'build', onBuild)}
           {row('Templates', 'grid', view === 'market', () => go('market'))}
@@ -1167,7 +1168,7 @@ function Sidebar({ view, setView, convId, setConvId, convs, onNew, onDelete, onD
               onContextMenu={e => { e.preventDefault(); cancelPress(); if (!selMode) { setSelMode(true); setSel(new Set([c.id])) } }}
               onClick={() => {
                 if (selMode) { toggleSel(c.id); return }
-                close()
+                closeIfMobile()
                 /* build chats reopen in the Build & Run workspace (preview-first) */
                 if (isBuildConv(c)) { onOpenBuild(c.id); return }
                 setConvId(c.id); setView('chat')
@@ -1186,10 +1187,10 @@ function Sidebar({ view, setView, convId, setConvId, convs, onNew, onDelete, onD
         {/* mobile drawer: layered bottom fade + floating New Chat pill and avatar */}
         <div className="drawer-fade" aria-hidden="true" />
         <div className="drawer-bottom">
-          <button className="drawer-fab" onClick={() => { onNew(); close() }}>
+          <button className="drawer-fab" onClick={() => { onNew(); closeIfMobile() }}>
             <Icon name="pen" size={18} /><span>New Chat</span>
           </button>
-          <button className="drawer-ava" aria-label="Your profile" onClick={() => { onProfile(); close() }}>
+          <button className="drawer-ava" aria-label="Your profile" onClick={() => { onProfile(); closeIfMobile() }}>
             {avatar ? <img src={avatar} alt="" /> : <span>{(name || 'P').slice(0, 1).toUpperCase()}</span>}
           </button>
         </div>
@@ -2468,6 +2469,8 @@ export default function App() {
   }, [view, convId])
   const [convs, setConvs] = useState<Conv[]>([])
   const [sideOpen, setSideOpen] = useState(() => window.innerWidth > 760)
+  /* desktop keeps the sidebar open on navigation — only mobile's drawer auto-closes */
+  const closeSideIfMobile = () => { if (window.innerWidth <= 760) setSideOpen(false) }
   /* drawer a11y: Escape closes it; background scroll locked while open on mobile */
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -2641,12 +2644,12 @@ export default function App() {
     try { localStorage.removeItem('ashtra-build-v1') } catch { /* quota */ }
     setBuildSeed(s => ({ k: s.k + 1, p: '' }))
     setBuildConvId(null)
-    setView('build'); setSideOpen(false)
+    setView('build'); closeSideIfMobile()
   }
   /* reopen a saved build chat: if the server has the site → Build & Run,
      otherwise fall back to the chat thread (old 🔨 builds with no stored html) */
   function openBuildConv(id: string) {
-    setSideOpen(false)
+    closeSideIfMobile()
     let dead = false
     ;(async () => {
       try {
