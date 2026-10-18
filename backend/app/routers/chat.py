@@ -261,6 +261,16 @@ async def chat(req: schemas.ChatRequest, request: Request, db: Session = Depends
         cmd_budget, cmd_reason = None, None
     t.mark("prep")  # planner + reminders + graph + goals + behaviour + prompt build
 
+    # --- MCP: live tool servers feed the model's tool loop (non-critical) ---
+    mcp_schemas: list = []
+    mcp_exec = None
+    try:
+        from ..services import mcp_client
+        mcp_schemas, mcp_exec = await mcp_client.tools_for_chat(db, user.id)
+    except Exception as e:
+        log.warning("[ASHRA API] mcp tools unavailable: %s", type(e).__name__)
+        mcp_schemas, mcp_exec = [], None
+
     # Auto-title only needs the user message — run it ALONGSIDE generation
     # instead of adding a second full LLM round-trip to the response path.
     title_task = asyncio.create_task(_auto_title(req.message)) if new_conv else None
@@ -444,18 +454,42 @@ async def chat(req: schemas.ChatRequest, request: Request, db: Session = Depends
         async def _events():
             parts: list[str] = []
             first = True
+            used_tools = False
             try:
-                async for chunk in ai_core.generate_reply_stream(
-                        gen_text, ctx, history, memory_context, adaptation_text,
-                        deep_thinking=bool(getattr(req, "deep_thinking", False)),
-                        max_tokens=cmd_budget,
-                        reasoning=cmd_reason, own_creds=own_creds):
-                    if first:
-                        t.mark("llm_ttft")  # time to first visible token
-                        first = False
-                    parts.append(chunk)
-                    yield "data: " + json.dumps(
-                        {"type": "delta", "text": chunk}, ensure_ascii=False) + "\n\n"
+                if mcp_schemas and mcp_exec is not None:
+                    # MCP tool turns run non-stream; the final text is emitted
+                    # as one delta through the same SSE channel.
+                    try:
+                        _text, _trace = await ai_core.generate_reply_with_tools(
+                            gen_text, ctx, history, memory_context, adaptation_text,
+                            deep_thinking=bool(getattr(req, "deep_thinking", False)),
+                            max_tokens=cmd_budget, reasoning=cmd_reason,
+                            own_creds=own_creds, tools=mcp_schemas, execute_tool=mcp_exec)
+                    except Exception as _e:
+                        log.warning("[ASHRA API] mcp tool loop failed: %s", type(_e).__name__)
+                        _text, _trace = "", []
+                    used_tools = True
+                    if _trace:
+                        tool_calls.extend(_trace)
+                    if _text:
+                        parts.append(_text)
+                        t.mark("llm_ttft")
+                        yield "data: " + json.dumps(
+                            {"type": "delta", "text": _text}, ensure_ascii=False) + "\n\n"
+                    else:
+                        used_tools = False  # fall back to the normal stream
+                if not used_tools:
+                    async for chunk in ai_core.generate_reply_stream(
+                            gen_text, ctx, history, memory_context, adaptation_text,
+                            deep_thinking=bool(getattr(req, "deep_thinking", False)),
+                            max_tokens=cmd_budget,
+                            reasoning=cmd_reason, own_creds=own_creds):
+                        if first:
+                            t.mark("llm_ttft")  # time to first visible token
+                            first = False
+                        parts.append(chunk)
+                        yield "data: " + json.dumps(
+                            {"type": "delta", "text": chunk}, ensure_ascii=False) + "\n\n"
             except Exception as e:
                 log.warning("[ASHRA API] stream failed after %d chunks: %s",
                             len(parts), type(e).__name__)
@@ -703,10 +737,25 @@ async def chat(req: schemas.ChatRequest, request: Request, db: Session = Depends
                      "X-Accel-Buffering": "no"})
 
     # --- JSON path (original contract) ---
-    reply = await ai_core.generate_reply(gen_text, ctx, history, memory_context, adaptation_text,
-                                           deep_thinking=bool(getattr(req, "deep_thinking", False)),
-                                           max_tokens=cmd_budget,
-                                           reasoning=cmd_reason, own_creds=own_creds)
+    if mcp_schemas and mcp_exec is not None:
+        try:
+            reply, _trace = await ai_core.generate_reply_with_tools(
+                gen_text, ctx, history, memory_context, adaptation_text,
+                deep_thinking=bool(getattr(req, "deep_thinking", False)),
+                max_tokens=cmd_budget, reasoning=cmd_reason, own_creds=own_creds,
+                tools=mcp_schemas, execute_tool=mcp_exec)
+            tool_calls.extend(_trace)
+        except Exception as e:
+            log.warning("[ASHRA API] mcp tool loop failed: %s", type(e).__name__)
+            reply = await ai_core.generate_reply(
+                gen_text, ctx, history, memory_context, adaptation_text,
+                deep_thinking=bool(getattr(req, "deep_thinking", False)),
+                max_tokens=cmd_budget, reasoning=cmd_reason, own_creds=own_creds)
+    else:
+        reply = await ai_core.generate_reply(gen_text, ctx, history, memory_context, adaptation_text,
+                                             deep_thinking=bool(getattr(req, "deep_thinking", False)),
+                                             max_tokens=cmd_budget,
+                                             reasoning=cmd_reason, own_creds=own_creds)
     t.mark("llm")
     log.info("[ASHRA API] generation completed user=%s reply_len=%d", user.id, len(reply or ""))
     return await _finalize(reply)

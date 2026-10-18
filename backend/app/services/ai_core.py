@@ -281,6 +281,99 @@ async def generate_reply(user_message: str, profile_context: str = "", history: 
     return _echo_reply(user_message, profile_context, memory_context, adaptation)
 
 
+async def generate_reply_with_tools(
+        user_message: str, profile_context: str = "", history: list[dict] = [],
+        memory_context: str = "", adaptation: str = "", deep_thinking: bool = False,
+        reasoning: str | None = None, max_tokens: int | None = None,
+        own_creds: list[tuple[str, str, str]] | None = None,
+        tools: list[dict] | None = None,
+        execute_tool=None, max_rounds: int = 4) -> tuple[str, list[dict]]:
+    """Non-streaming reply that lets the model call MCP tools between rounds.
+
+    Returns (text, trace) — trace entries are {"tool": name, "ok": bool} for
+    the existing 🔧[...] reply suffix. Same link chain as generate_reply;
+    falls back to a plain reply when no tool-capable link answers.
+    """
+    if not tools or execute_tool is None:
+        text = await generate_reply(user_message, profile_context, history,
+                                    memory_context, adaptation, deep_thinking,
+                                    reasoning=reasoning, max_tokens=max_tokens,
+                                    own_creds=own_creds)
+        return text, []
+
+    links: list[tuple[str, str, str]] = list(own_creds or [])
+    if settings.openai_base_url and settings.openai_api_key:
+        links.append((settings.openai_base_url, settings.openai_api_key, settings.openai_model))
+    if settings.groq_api_key:
+        links.append((settings.groq_base_url, settings.groq_api_key, settings.groq_model))
+    log = logging.getLogger("ashtra.llm")
+
+    for base_url, api_key, model in links:
+        messages = _build_messages(user_message, profile_context, history,
+                                   memory_context, adaptation)
+        trace: list[dict] = []
+        for _round in range(max_rounds + 1):
+            payload = _build_payload(model, messages, user_message, deep_thinking,
+                                     reasoning=reasoning, max_tokens=max_tokens)
+            payload["tools"] = tools
+            try:
+                r = await _http().post(
+                    f"{base_url.rstrip('/')}/chat/completions",
+                    headers={"Authorization": f"Bearer {api_key}"},
+                    json=payload,
+                    timeout=httpx.Timeout(90.0, connect=10.0),
+                )
+                r.raise_for_status()
+                msg = r.json()["choices"][0]["message"]
+            except Exception as e:
+                detail = ""
+                try:
+                    resp = getattr(e, "response", None)
+                    if resp is not None:
+                        detail = f" status={resp.status_code} body={resp.text[:200]}"
+                except Exception:
+                    pass
+                # 400 on `tools` = this model/endpoint rejects function calling
+                log.warning("tool loop link failed (%s, model %s): %s%s",
+                            base_url.split('//')[-1][:30], model, type(e).__name__, detail)
+                break  # link failed → next link
+            calls = msg.get("tool_calls") or []
+            if not calls:
+                text = (msg.get("content") or "").strip()
+                if text:
+                    return text, trace
+                break  # empty content → next link
+            messages.append({
+                "role": "assistant",
+                "content": msg.get("content") or "",
+                "tool_calls": calls,
+            })
+            for tc in calls:
+                fn = (tc.get("function") or {}).get("name") or ""
+                try:
+                    args = json.loads((tc.get("function") or {}).get("arguments") or "{}")
+                except ValueError:
+                    args = {}
+                try:
+                    result = await execute_tool(fn, args if isinstance(args, dict) else {})
+                    trace.append({"tool": fn, "ok": True})
+                except Exception as e:
+                    result = f"Tool error: {type(e).__name__}: {e}"
+                    trace.append({"tool": fn, "ok": False})
+                messages.append({
+                    "role": "tool",
+                    "tool_call_id": tc.get("id") or "",
+                    "content": str(result)[:8000],
+                })
+        # reaching here = this link produced no usable text → next link
+    # no tool-capable link worked → plain reply, no tools
+    text = await generate_reply(user_message, profile_context, history,
+                                memory_context, adaptation, deep_thinking,
+                                reasoning=reasoning, max_tokens=max_tokens,
+                                own_creds=own_creds)
+    return text, []
+
+
 def _echo_reply(user_message: str, profile_context: str, memory_context: str, adaptation: str) -> str:
     parts = [f"I hear you, master: '{user_message}'"]
     if adaptation.strip():
@@ -345,4 +438,20 @@ def build_profile_context(profile) -> str:
         f" teaching={getattr(profile, 'teaching_style', 'examples')},"
         f" expertise={getattr(profile, 'expertise_level', 'intermediate')},"
         f" interests={profile.interests}, goals={profile.goals}, skills={profile.skills}."
+        + profile_extras(profile)
     )
+
+
+def profile_extras(profile) -> str:
+    """User's display name + custom system prompt — appended to every system
+    prompt in the app (chat, Build & Run, Research). Empty when unset."""
+    if not profile:
+        return ""
+    parts: list[str] = []
+    name = (getattr(profile, "display_name", None) or "").strip()
+    if name:
+        parts.append(f" The user's name is {name}; use it naturally when it fits.")
+    custom = (getattr(profile, "custom_system_prompt", None) or "").strip()
+    if custom:
+        parts.append(f"\n[Custom instructions from the user]\n{custom}")
+    return "".join(parts)

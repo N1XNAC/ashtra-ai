@@ -13,8 +13,9 @@
        q=<text>      type into the composer
        enter=1       press Enter (send)
        ctext=<words> click the first button containing the words
-       click=<sel>   click a CSS selector inside the app
-       wait=<ms>     extra settle time before capture (default 9000 virtual ms) */
+        click=<sel>   click a CSS selector inside the app
+        click2=<sel>  second selector click (after ctext; default 4300ms)
+        wait=<ms>     extra settle time before capture (default 9000 virtual ms) */
   const q = new URLSearchParams(location.search)
   const W = +(q.get('W') || 560), H = +(q.get('H') || 1000)
   const fit = q.get('fit') === '1'
@@ -44,7 +45,7 @@
   }
   const typeText = txt => {
     const d = frame()
-    const ta = d && d.querySelector('.uv-chat textarea')
+    const ta = d && (d.querySelector('.lcomp textarea') || d.querySelector('.uv-chat textarea'))
     if (!ta) return false
     const set = Object.getOwnPropertyDescriptor(f.contentWindow.HTMLTextAreaElement.prototype, 'value').set
     set.call(ta, txt)
@@ -53,7 +54,7 @@
   }
   const pressEnter = () => {
     const d = frame()
-    const ta = d && d.querySelector('.uv-chat textarea')
+    const ta = d && (d.querySelector('.lcomp textarea') || d.querySelector('.uv-chat textarea'))
     if (!ta) return false
     ta.dispatchEvent(new f.contentWindow.KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }))
     return true
@@ -63,6 +64,7 @@
     setTimeout(() => { if (q.get('ctext')) clickByText(q.get('ctext')) }, 2700)
     setTimeout(() => { if (q.get('q')) typeText(q.get('q')) }, 3200)
     setTimeout(() => { if (q.get('enter')) pressEnter() }, 3800)
+    setTimeout(() => { if (q.get('click2')) { const d = frame(); d && d.querySelector(q.get('click2'))?.click() } }, 4300)
   })
 </script>
 </body></html>

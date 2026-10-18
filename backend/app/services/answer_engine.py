@@ -202,6 +202,14 @@ async def run_answer(question: str, focus: str, db, user_id: str):
         own_creds = byok_svc.creds_for(db, user_id) or None
     except Exception:
         own_creds = None
+    # user's name + custom system prompt ride along with the grounded answer
+    extras = ""
+    try:
+        from .. import models
+        prof = db.query(models.UserProfile).filter_by(user_id=user_id).first()
+        extras = ai_core.profile_extras(prof)
+    except Exception:
+        extras = ""
 
     yield ("phase", "understanding")
     queries = await rewrite_queries(question, own_creds=own_creds)
@@ -252,7 +260,7 @@ async def run_answer(question: str, focus: str, db, user_id: str):
     for p in top:
         s = sources[p["source"] - 1]
         ctx_lines.append(f"[{p['source']}] {s['title']} — {s['url']}\n{p['text'][:1500]}")
-    prompt = (f"{GROUND_SYS}\n\nQuestion: {question}\n\nSources:\n"
+    prompt = (f"{GROUND_SYS}{extras}\n\nQuestion: {question}\n\nSources:\n"
               + "\n\n".join(ctx_lines))
 
     yield ("phase", "writing")

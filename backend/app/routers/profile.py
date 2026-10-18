@@ -1,10 +1,15 @@
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from ..database import get_db
 from .. import models, schemas
 from ..services import personality_adapter
 
 router = APIRouter(prefix="/profile", tags=["profile"])
+
+# avatar payloads stay small (canvas-downscaled ~256px JPEG on the client)
+_AVATAR_MAX_CHARS = 800_000
+_NAME_MAX = 32
+_SYSTEM_PROMPT_MAX = 4000
 
 def _get_or_create(user_id: str, db: Session):
     p = db.query(models.UserProfile).filter_by(user_id=user_id).first()
@@ -29,7 +34,22 @@ def get_profile(user_id: str, db: Session = Depends(get_db)):
 @router.patch("/{user_id}", response_model=schemas.ProfileOut)
 def update_profile(user_id: str, u: schemas.ProfileUpdate, db: Session = Depends(get_db)):
     p = _get_or_create(user_id, db)
-    for k, v in u.model_dump(exclude_none=True).items():
+    data = u.model_dump(exclude_none=True)
+    av = data.get("avatar_data")
+    if av is not None:
+        # photo must be an image data URL and small enough for the account row
+        if not isinstance(av, str) or not av.startswith("data:image/"):
+            raise HTTPException(status_code=400, detail="avatar_data must be an image data URL.")
+        if len(av) > _AVATAR_MAX_CHARS:
+            raise HTTPException(status_code=400, detail="avatar_data is too large (max ~600 KB).")
+    dn = data.get("display_name")
+    if dn is not None and len(dn) > _NAME_MAX:
+        raise HTTPException(status_code=400, detail=f"display_name must be {_NAME_MAX} characters or fewer.")
+    csp = data.get("custom_system_prompt")
+    if csp is not None and len(csp) > _SYSTEM_PROMPT_MAX:
+        raise HTTPException(status_code=400,
+                            detail=f"custom_system_prompt must be {_SYSTEM_PROMPT_MAX} characters or fewer.")
+    for k, v in data.items():
         setattr(p, k, v)
     db.commit()
     db.refresh(p)

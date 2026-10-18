@@ -67,6 +67,9 @@ class UserProfile(Base):
     teaching_style = Column(String, default="examples")  # examples | theory | hands-on
     expertise_level = Column(String, default="intermediate")  # beginner | intermediate | advanced
     behaviour_signals = Column(JSON, default=dict)  # counters + observations
+    avatar_data = Column(Text, nullable=True)  # downscaled profile photo (data URL)
+    display_name = Column(String, nullable=True)  # what AZX should call the user
+    custom_system_prompt = Column(Text, nullable=True)  # user-authored instructions
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
     user = relationship("User", back_populates="profile")
@@ -190,6 +193,30 @@ class UserApiKey(Base):
     api_key = Column(String, nullable=False)
     model = Column(String, nullable=True)  # user's preferred model for this provider
     last_error = Column(String, nullable=True)  # last live-test failure (honest status)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    user = relationship("User")
+
+class MCPServer(Base):
+    # MCP (Model Context Protocol) connection — user-configured tool server.
+    # stdio: a command spawned on the backend host; http: a remote endpoint.
+    # headers may hold auth tokens: DB-only, never returned whole in API
+    # responses (BYOK masked-key precedent).
+    __tablename__ = "mcp_servers"
+    __table_args__ = (UniqueConstraint("user_id", "name", name="uq_user_mcp_name"),)
+    id = Column(String, primary_key=True, default=uid)
+    user_id = Column(String, ForeignKey("users.id"), nullable=False, index=True)
+    name = Column(String, nullable=False)
+    transport = Column(String, nullable=False, default="stdio")  # stdio | http
+    command = Column(String, nullable=True)   # stdio executable (e.g. npx)
+    args = Column(JSON, default=list)         # stdio argv
+    url = Column(String, nullable=True)       # remote HTTP endpoint
+    headers = Column(JSON, default=dict)      # remote auth headers (never returned)
+    enabled = Column(Boolean, default=True)
+    status = Column(String, default="disconnected")  # disconnected|connecting|connected|error
+    tools = Column(JSON, default=list)        # cached tools/list result
+    last_error = Column(String, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 

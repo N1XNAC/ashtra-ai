@@ -8,7 +8,7 @@ from sqlalchemy import text
 from fastapi.middleware.cors import CORSMiddleware
 from .database import Base, engine, ensure_phase3_columns
 from . import models  # noqa: F401 — register tables
-from .routers import chat, memory, profile, agent, model, graph, vision, web, build, schedule, market, answer, byok
+from .routers import chat, memory, profile, agent, model, graph, vision, web, build, schedule, market, answer, byok, mcp
 from .config import settings
 from .security import (
     GlobalRateLimitMiddleware, ApiKeyMiddleware, SecurityHeadersMiddleware)
@@ -83,6 +83,12 @@ async def lifespan(app: FastAPI):
     task = asyncio.create_task(scheduler())
     yield
     task.cancel()
+    # MCP: terminate any spawned stdio servers / close HTTP sessions
+    try:
+        from .services import mcp_client
+        await mcp_client.disconnect_all()
+    except Exception:
+        pass
 
 
 app = FastAPI(title="azx AI — Phase 6",
@@ -114,6 +120,7 @@ app.include_router(schedule.router)
 app.include_router(byok.router)
 app.include_router(market.router)
 app.include_router(answer.router)
+app.include_router(mcp.router)
 
 @app.get("/health")
 def health():

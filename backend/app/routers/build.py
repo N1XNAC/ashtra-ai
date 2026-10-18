@@ -25,6 +25,7 @@ from ..config import settings
 from ..database import get_db
 from ..services import memory_engine, prompt_engine, template_bank, web_images
 from ..services import byok as byok_svc
+from ..services import ai_core
 
 router = APIRouter(prefix="/build", tags=["build"])
 _log = logging.getLogger("ashtra.build")
@@ -260,7 +261,8 @@ def _json_out(text: str) -> dict:
         return {}
 
 
-async def _understand(prompt: str, mem_ctx: str = "", own_creds=None) -> dict:
+async def _understand(prompt: str, mem_ctx: str = "", own_creds=None,
+                      extras: str = "") -> dict:
     """Stage 1 — does the user actually want a site? If so, write the spec."""
     user_msg = prompt
     if mem_ctx:
@@ -269,7 +271,7 @@ async def _understand(prompt: str, mem_ctx: str = "", own_creds=None) -> dict:
     data: dict = {}
     for _attempt in range(3):  # JSON sometimes gets truncated mid-spec — retry
         out = await _llm_html([
-            {"role": "system", "content": _UNDERSTAND_SYS},
+            {"role": "system", "content": _UNDERSTAND_SYS + extras},
             {"role": "user", "content": user_msg},
         ], "openai/gpt-oss-20b", 1200, "low", own_creds=own_creds)
         data = _json_out(out)
@@ -510,13 +512,14 @@ def _apply_diff_blocks(html: str, out: str) -> tuple[str | None, str]:
 
 
 async def _edit_html(html: str, instruction: str, model: str, on_phase=None,
-                     own_creds: list[tuple[str, str, str]] | None = None) -> str:
+                     own_creds: list[tuple[str, str, str]] | None = None,
+                     extras: str = "") -> str:
     """Diff-first edit with full-rewrite fallback. Returns complete HTML."""
     if on_phase:
         await on_phase("diff")
     try:
         dout = await _llm_html([
-            {"role": "system", "content": _DIFF_SYS},
+            {"role": "system", "content": _DIFF_SYS + extras},
             {"role": "user", "content": (
                 f"CHANGE REQUEST: {instruction}\n\nCURRENT HTML:\n{html}")},
         ], model, 2000, own_creds=own_creds)
@@ -530,11 +533,20 @@ async def _edit_html(html: str, instruction: str, model: str, on_phase=None,
     if on_phase:
         await on_phase("rewrite")
     out = await _llm_html([
-        {"role": "system", "content": _EDIT_SYS},
+        {"role": "system", "content": _EDIT_SYS + extras},
         {"role": "user", "content": (
             f"CHANGE REQUEST: {instruction}\n\nCURRENT HTML:\n{html}")},
     ], model, 16000, "medium", require_html=True, own_creds=own_creds)
     return _clean(out)
+
+
+def _extras_for(db: Session, user_id: str) -> str:
+    """User's name + custom system prompt, appended to build prompts."""
+    try:
+        prof = db.query(models.UserProfile).filter_by(user_id=user_id).first()
+        return ai_core.profile_extras(prof)
+    except Exception:
+        return ""
 
 
 async def _stream_work(work_factory):
@@ -631,6 +643,7 @@ async def build_website(req: BuildRequest, request: Request, db: Session = Depen
     if not prompt:
         raise HTTPException(status_code=400, detail="Prompt is empty.")
     own_creds = byok_svc.creds_for(db, req.user_id) or None
+    extras = _extras_for(db, req.user_id)
 
     async def _work(emit) -> dict:
         # Web Market template flow: "Use template" seeds the prompt with the
@@ -661,7 +674,7 @@ async def build_website(req: BuildRequest, request: Request, db: Session = Depen
             try:
                 cand = await _edit_html(html, custom, model,
                                         on_phase=lambda label: emit("phase", label),
-                                        own_creds=own_creds)
+                                        own_creds=own_creds, extras=extras)
                 # only accept a complete rewrite of the same template; otherwise
                 # fall back to the exact untouched template (still a valid site)
                 if ("</html>" in cand.lower() and "<html" in cand.lower()
@@ -678,7 +691,7 @@ async def build_website(req: BuildRequest, request: Request, db: Session = Depen
                 await emit("phase", "lint")
                 try:
                     _fix = _auto_fix(_clean(await _llm_html([
-                        {"role": "system", "content": _SYS},
+                        {"role": "system", "content": _SYS + extras},
                         {"role": "assistant", "content": html},
                         {"role": "user", "content": "QA found violations:\n- "
                          + "\n- ".join(_tpl_v) + "\nReturn the FULL corrected single HTML "
@@ -732,7 +745,8 @@ async def build_website(req: BuildRequest, request: Request, db: Session = Depen
             mem_ctx = ""
         await emit("phase", "understand")
         try:
-            understanding = await _understand(prompt, mem_ctx, own_creds=own_creds)
+            understanding = await _understand(prompt, mem_ctx, own_creds=own_creds,
+                                              extras=extras)
         except HTTPException:
             raise
         except Exception as e:
@@ -805,7 +819,7 @@ async def build_website(req: BuildRequest, request: Request, db: Session = Depen
         if urls:
             user_msg += "\n\nIMAGE URLS (use these, and only these, for imagery):\n" + urls
         messages = [
-            {"role": "system", "content": _SYS},
+            {"role": "system", "content": _SYS + extras},
             {"role": "user", "content": user_msg},
         ]
 
@@ -832,7 +846,7 @@ async def build_website(req: BuildRequest, request: Request, db: Session = Depen
                         else "final quality pass…"))
             try:
                 cand = _auto_fix(_clean(await _llm_html([
-                    {"role": "system", "content": _SYS},
+                    {"role": "system", "content": _SYS + extras},
                     {"role": "assistant", "content": best_html},
                     {"role": "user", "content": "QA found violations:\n- "
                      + "\n- ".join(best_v) + "\nReturn the FULL corrected single HTML "
@@ -948,12 +962,13 @@ async def build_edit(req: BuildEdit, db: Session = Depends(get_db)):
     if not instruction:
         raise HTTPException(status_code=400, detail="No instruction given.")
     own_creds = byok_svc.creds_for(db, req.user_id) or None
+    extras = _extras_for(db, req.user_id)
 
     async def _work(emit) -> dict:
         try:
             html = await _edit_html(job["html"], instruction, "openai/gpt-oss-120b",
                                     on_phase=lambda label: emit("phase", label),
-                                    own_creds=own_creds)
+                                    own_creds=own_creds, extras=extras)
         except HTTPException:
             raise
         except Exception as e:

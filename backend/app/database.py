@@ -49,6 +49,9 @@ def ensure_phase3_columns():
             "teaching_style": "VARCHAR DEFAULT 'examples'",
             "expertise_level": "VARCHAR DEFAULT 'intermediate'",
             "behaviour_signals": "JSON",
+            "avatar_data": "TEXT",  # profile photo (downscaled data URL)
+            "display_name": "VARCHAR",
+            "custom_system_prompt": "TEXT",
         },
         "memories": {
             "embedding": "TEXT",  # pgvector — exact nearest-neighbour search

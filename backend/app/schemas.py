@@ -114,6 +114,9 @@ class ProfileUpdate(BaseModel):
     communication_format: Optional[str] = None
     teaching_style: Optional[str] = None
     expertise_level: Optional[str] = None
+    avatar_data: Optional[str] = None  # downscaled data URL, validated in the router
+    display_name: Optional[str] = None
+    custom_system_prompt: Optional[str] = None
 
 class ProfileOut(BaseModel):
     answer_style: str
@@ -127,6 +130,9 @@ class ProfileOut(BaseModel):
     teaching_style: str = "examples"
     expertise_level: str = "intermediate"
     behaviour_signals: Dict[str, Any] = {}
+    avatar_data: Optional[str] = None
+    display_name: Optional[str] = None
+    custom_system_prompt: Optional[str] = None
     class Config:
         from_attributes = True
 

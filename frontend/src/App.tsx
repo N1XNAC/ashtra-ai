@@ -179,6 +179,17 @@ const PATHS: Record<string, ReactNode> = {
   brain: (<><circle cx="12" cy="12" r="8" /><path d="M12 4v16M8.5 9h7M8.5 15h7" /></>),
   bag: (<><path d="M6 8h12l1 12a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2L6 8Z" /><path d="M9 10V6a3 3 0 0 1 6 0v4" /></>),
   gear: (<><circle cx="12" cy="12" r="3" /><path d="M19.4 15a1.7 1.7 0 0 0 .34 1.87l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.7 1.7 0 0 0-1.87-.34 1.7 1.7 0 0 0-1 1.55V21a2 2 0 1 1-4 0v-.09a1.7 1.7 0 0 0-1-1.55 1.7 1.7 0 0 0-1.87.34l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.7 1.7 0 0 0 .34-1.87 1.7 1.7 0 0 0-1.55-1H3a2 2 0 1 1 0-4h.09a1.7 1.7 0 0 0 1.55-1 1.7 1.7 0 0 0-.34-1.87l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.7 1.7 0 0 0 1.87.34h.09a1.7 1.7 0 0 0 1-1.55V3a2 2 0 1 1 4 0v.09a1.7 1.7 0 0 0 1 1.55h.09a1.7 1.7 0 0 0 1.87-.34l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.7 1.7 0 0 0-.34 1.87v.09a1.7 1.7 0 0 0 1.55 1H21a2 2 0 1 1 0 4h-.09a1.7 1.7 0 0 0-1.55 1Z" /></>),
+  home: (<><path d="m3 10.5 9-7.5 9 7.5V20a1 1 0 0 1-1 1h-5.5v-6.5h-5V21H4a1 1 0 0 1-1-1Z" /></>),
+  circles: (<><circle cx="8.5" cy="8.5" r="2.7" /><circle cx="15.5" cy="8.5" r="2.7" /><circle cx="8.5" cy="15.5" r="2.7" /><circle cx="15.5" cy="15.5" r="2.7" /></>),
+  chart: (<><path d="M4 20h16" /><path d="M6.5 20v-6" /><path d="M12 20V7" /><path d="M17.5 20v-9" /></>),
+  chev: (<><path d="m9.5 5.5 6.5 6.5-6.5 6.5" /></>),
+  smile: (<><circle cx="12" cy="12" r="9" /><path d="M8.5 14c1 1.3 2.1 2 3.5 2s2.5-.7 3.5-2" /><path d="M9 9.5h.01M15 9.5h.01" /></>),
+  openbook: (<><path d="M12 6.5C10.5 5 8.5 4.5 4 4.5V18c4.5 0 6.5.5 8 2 1.5-1.5 3.5-2 8-2V4.5c-4.5 0-6.5.5-8 2Z" /><path d="M12 6.5V20" /></>),
+  briefcase: (<><rect x="3" y="7.5" width="18" height="12.5" rx="2" /><path d="M8.5 7.5V6a2 2 0 0 1 2-2h3a2 2 0 0 1 2 2v1.5" /><path d="M3 12.5h18" /></>),
+  plusbox: (<><rect x="3.5" y="3.5" width="17" height="17" rx="4.5" /><path d="M12 8.5v7M8.5 12h7" /></>),
+  docx: (<><rect x="4.5" y="3" width="15" height="18" rx="2" /><path d="M8.5 8.5h7M8.5 12h7M8.5 15.5h4" /></>),
+  info: (<><circle cx="12" cy="12" r="9" /><path d="M12 11v5.5" /><path d="M12 7.5h.01" /></>),
+  arrowleft: (<><path d="M19 12H5" /><path d="m11 5-7 7 7 7" /></>),
 }
 function Icon({ name, size = 17 }: { name: keyof typeof PATHS; size?: number }) {
   return (
@@ -238,10 +249,22 @@ function renderMd(src: string) {
 }
 
 /* ---------- types ---------- */
-type View = 'chat' | 'library' | 'projects' | 'plugins' | 'build' | 'market' | 'memory' | 'you' | 'settings' | 'answer'
+type View = 'chat' | 'library' | 'projects' | 'plugins' | 'build' | 'market' | 'memory' | 'you' | 'settings' | 'answer' | 'personality'
 type VCards = { title: string; flow: boolean; items: { icon: string; label: string; text: string }[] }
 type Msg = { role: string; content: string; meta?: string; fresh?: boolean; attachment?: string; saved?: string[]; study?: { visual?: { title: string; thumb: string }[]; visual_svg?: string; visual_cards?: VCards; actions?: string[]; visual_available?: boolean; expect?: string } }
 type Conv = { id: string; title: string; created_at?: string; is_build?: boolean }
+/* relative date label for recent-chat rows: Today / Yesterday / "Oct 15" */
+function relDate(iso?: string): string {
+  if (!iso) return ''
+  const d = new Date(iso)
+  if (isNaN(d.getTime())) return ''
+  const now = new Date()
+  const startToday = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime()
+  const t = d.getTime()
+  if (t >= startToday) return 'Today'
+  if (t >= startToday - 86400000) return 'Yesterday'
+  return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
+}
 /* Per-chat session: drafts, attachments, messages and working state live here,
    keyed by conversation id ('new' for the unsent draft). Switching chats can
    never leak one chat's state into another; background completions write to
@@ -316,8 +339,10 @@ type DictationCtor = new () => {
 }
 /* Voice dictation state machine:
    idle → requesting → listening → transcribing → idle, plus error.
-   Real microphone amplitude drives the listening-strip bars (AnalyserNode).
-   Final transcripts are appended to the draft — never auto-sent. */
+   Real microphone amplitude drives the in-composer bars (AnalyserNode).
+   While active, the dictation UI replaces the entire composer row (attach,
+   field, mic, send all hidden); on stop/end the transcript lands in the draft
+   — dictation never auto-sends. */
 type VoicePhase = 'idle' | 'requesting' | 'listening' | 'transcribing' | 'error'
 const VOICE_BARS = 22
 function useDictation(onText: (t: string) => void) {
@@ -330,6 +355,8 @@ function useDictation(onText: (t: string) => void) {
   const ctxRef = useRef<AudioContext | null>(null)
   const rafRef = useRef<number | null>(null)
   const phaseRef = useRef<VoicePhase>('idle')
+  /* finals buffer — transcript is flushed into the draft only when done */
+  const finalsRef = useRef('')
   const w = typeof window !== 'undefined'
     ? window as unknown as { SpeechRecognition?: DictationCtor; webkitSpeechRecognition?: DictationCtor }
     : undefined
@@ -377,6 +404,7 @@ function useDictation(onText: (t: string) => void) {
 
   const stopAll = () => {
     if (phaseRef.current === 'listening') setPh('transcribing')
+    else if (phaseRef.current === 'requesting') setPh('idle')
     try { recRef.current?.stop() } catch { /* ignore */ }
     cleanup()
     setInterim('')
@@ -408,13 +436,15 @@ function useDictation(onText: (t: string) => void) {
           if (r.isFinal) finals += t
           else inter += t
         }
-        if (finals.trim()) { onText(finals.trim()); setInterim('') }
-        else setInterim(inter)
+        if (finals) finalsRef.current += finals
+        setInterim(inter || finalsRef.current)
       }
       rec.onerror = (ev: { error?: string }) => {
         const code = ev.error ?? ''
         cleanup()
         setInterim('')
+        const partial = finalsRef.current.trim(); finalsRef.current = ''
+        if (partial) onText(partial)
         if (code === 'not-allowed' || code === 'service-not-allowed') {
           setPh('error'); setError('Microphone permission denied — allow it in your browser settings.')
         } else if (code === 'no-speech') {
@@ -427,7 +457,9 @@ function useDictation(onText: (t: string) => void) {
         cleanup()
         setInterim('')
         setLevels(new Array(VOICE_BARS).fill(0.06))
-        setPh('idle')
+        const spoken = finalsRef.current.trim(); finalsRef.current = ''
+        if (spoken) onText(spoken)
+        if (phaseRef.current !== 'error') setPh('idle')
       }
       recRef.current = rec
       setPh('listening')
@@ -450,66 +482,62 @@ function ComposerShell({ lead, field, canSend, onSend, sendLabel, head, streamin
 }) {
   const dictation = useDictation(t => onVoice?.(t))
   const vc = dictation
+  /* while dictating, the composer row itself becomes the voice UI —
+     attach, field, mic and send stay hidden until dictation ends */
+  const voicing = !!(onVoice && vc.supported && vc.phase !== 'idle')
   return (
     <div className="composer">
       {head}
       <div className="uv-chatbot">
         <div className="uv-chat-options">
-          <div className="uv-chat">
-            <div className="uv-btns-add uv-lead">{lead}</div>
-            <div className="uv-chat-bot">{field}</div>
-            <div className="uv-options">
-              {onVoice && vc.supported && (
-                <>
-                  <span className={`vwave${vc.listening ? ' on' : ''}`} aria-hidden="true">
-                    <Icon name="wave" size={15} />
+          {voicing ? (
+            <div className="uv-chat" role="status" aria-live="polite">
+              <div className={`vinline${vc.phase === 'error' ? ' err' : ''}`}>
+                {vc.phase === 'listening' && (
+                  <span className="vbars" aria-hidden="true">
+                    {vc.levels.map((a, i) => (
+                      <i key={i} style={{ height: `${Math.round(4 + a * 24)}px` }} />
+                    ))}
                   </span>
-                  <button type="button" className={`uv-mic${vc.listening ? ' on' : ''}`}
-                    aria-pressed={vc.listening}
-                    aria-label={vc.listening ? 'Stop dictation' : 'Dictate with your voice'}
-                    onClick={vc.toggle}>
-                    <i><Icon name={vc.listening ? 'stop' : 'mic'} size={17} /></i>
+                )}
+                <span className="vlabel">
+                  {vc.phase === 'requesting' && 'Starting microphone…'}
+                  {vc.phase === 'listening' && (vc.interim || 'Listening…')}
+                  {vc.phase === 'transcribing' && 'Transcribing…'}
+                  {vc.phase === 'error' && (vc.error || 'Dictation failed.')}
+                </span>
+                {vc.phase !== 'transcribing' && (
+                  <button type="button" className="vstop" aria-label="Stop dictation"
+                    onClick={vc.phase === 'error' ? vc.dismissError : vc.toggle}>
+                    <Icon name="stop" size={13} />
                   </button>
-                </>
-              )}
-              {streaming ? (
-                <button className="uv-submit stop" onClick={onStop} aria-label="Stop generating">
-                  <i><Icon name="stop" size={16} /></i>
-                </button>
-              ) : canSend ? (
-                <button className="uv-submit ready" onClick={onSend} aria-label={sendLabel}>
-                  <i><Icon name="up" size={18} /></i>
-                </button>
-              ) : null /* empty state matches the reference: mic only, no dimmed send */}
+                )}
+              </div>
             </div>
-          </div>
+          ) : (
+            <div className="uv-chat">
+              <div className="uv-btns-add uv-lead">{lead}</div>
+              <div className="uv-chat-bot">{field}</div>
+              <div className="uv-options">
+                {onVoice && vc.supported && (
+                  <button type="button" className="uv-mic" aria-label="Dictate with your voice"
+                    onClick={vc.toggle}>
+                    <i><Icon name="mic" size={17} /></i>
+                  </button>
+                )}
+                {streaming ? (
+                  <button className="uv-submit stop" onClick={onStop} aria-label="Stop generating">
+                    <i><Icon name="stop" size={16} /></i>
+                  </button>
+                ) : canSend ? (
+                  <button className="uv-submit ready" onClick={onSend} aria-label={sendLabel}>
+                    <i><Icon name="up" size={18} /></i>
+                  </button>
+                ) : null /* empty state matches the reference: mic only, no dimmed send */}
+              </div>
+            </div>
+          )}
         </div>
-        {onVoice && vc.supported && vc.phase !== 'idle' && (
-          <div className={`vstrip${vc.phase === 'error' ? ' err' : ''}`} role="status" aria-live="polite">
-            {vc.phase === 'listening' && (
-              <span className="vbars" aria-hidden="true">
-                {vc.levels.map((a, i) => (
-                  <i key={i} style={{ height: `${Math.round(4 + a * 24)}px` }} />
-                ))}
-              </span>
-            )}
-            <span className="vlabel">
-              {vc.phase === 'requesting' && 'Starting microphone…'}
-              {vc.phase === 'listening' && 'Listening…'}
-              {vc.phase === 'transcribing' && 'Transcribing…'}
-              {vc.phase === 'error' && (vc.error || 'Dictation failed.')}
-            </span>
-            {vc.phase === 'listening' && vc.interim && (
-              <span className="vinterim">{vc.interim}</span>
-            )}
-            {vc.phase !== 'transcribing' && (
-              <button type="button" className="vstop" aria-label="Stop dictation"
-                onClick={vc.phase === 'error' ? vc.dismissError : vc.toggle}>
-                <Icon name="stop" size={13} />
-              </button>
-            )}
-          </div>
-        )}
       </div>
     </div>
   )
@@ -1055,13 +1083,14 @@ function Chat({ convId, sessKey, sess, patchSess, onNewConv, refreshSidebar, onD
 }
 
 /* ---------- sidebar ---------- */
-function Sidebar({ view, setView, convId, setConvId, convs, onNew, onDelete, onDeleteMany, open, close, name, onBuild, onOpenBuild }: {
+function Sidebar({ view, setView, convId, setConvId, convs, onNew, onDelete, onDeleteMany, open, close, name, avatar, onBuild, onOpenBuild, onProfile }: {
   view: View; setView: (v: View) => void
   convId: string | null; setConvId: (id: string | null) => void
   convs: Conv[]; onNew: () => void; onDelete: (id: string) => void
   onDeleteMany: (ids: string[]) => void
   open: boolean; close: () => void
-  name: string; onBuild: () => void; onOpenBuild: (convId: string) => void
+  name: string; avatar: string; onBuild: () => void; onOpenBuild: (convId: string) => void
+  onProfile: () => void
 }) {
   const [q, setQ] = useState('')
   /* long-press (or right-click) a chat → multi-select delete mode */
@@ -1085,9 +1114,11 @@ function Sidebar({ view, setView, convId, setConvId, convs, onNew, onDelete, onD
     return n
   })
   const go = (v: View) => { setView(v); close() }
-  const row = (label: string, icon: keyof typeof PATHS, active: boolean, onClick: () => void) => (
-    <button key={label} className={`mrow${active ? ' on' : ''}`} onClick={onClick}>
-      <Icon name={icon} size={19} /><span className="t">{label}</span>
+  /* desktop nav rows: icon + label + optional right chevron (per AZX spec) */
+  const row = (label: string, icon: keyof typeof PATHS, active: boolean, onClick: () => void, chev = true, cls = '') => (
+    <button key={label} className={`mrow ${cls}${active ? ' on' : ''}`} onClick={onClick}>
+      <Icon name={icon} size={18} /><span className="t">{label}</span>
+      {chev && <span className="mright" aria-hidden="true"><Icon name="chev" size={14} /></span>}
     </button>
   )
   const rows = convs.filter(c => c.id !== '__draft' && (!q.trim() || c.title.toLowerCase().includes(q.toLowerCase())))
@@ -1103,16 +1134,20 @@ function Sidebar({ view, setView, convId, setConvId, convs, onNew, onDelete, onD
           </div>
         </div>
         <nav className="mnav">
-          {row('New chat', 'pen', false, () => { onNew(); close() })}
+          {row('New chat', 'pen', false, () => { onNew(); close() }, false, 'nav-newchat')}
+          {row('Home', 'home', view === 'chat', () => { setConvId(null); go('chat') }, false)}
           {row('Build & Run', 'code', view === 'build', onBuild)}
           {row('Templates', 'grid', view === 'market', () => go('market'))}
-          {row('Answers', 'search', view === 'answer', () => go('answer'))}
-          {row('Memory', 'memory', view === 'memory', () => go('memory'))}
+          {row('Research & Analysis', 'chart', view === 'answer', () => go('answer'))}
         </nav>
+        <div className="nav-sep" aria-hidden="true" />
         <div className="drawer-search"><Icon name="search" size={16} />
-          <input value={q} onChange={e => setQ(e.target.value)} placeholder="Search" aria-label="Search chats" />
+          <input value={q} onChange={e => setQ(e.target.value)} placeholder="Search chats..." aria-label="Search chats" />
         </div>
-        <div className="sect">Recent chats</div>
+        <div className="sect-head">
+          <span className="sect">Recent Chats</span>
+          <button className="see-all" onClick={() => go('library')}>See all <Icon name="chev" size={12} /></button>
+        </div>
         {selMode && (
           <div className="selbar">
             <span className="selcount">{sel.size} selected</span>
@@ -1142,15 +1177,28 @@ function Sidebar({ view, setView, convId, setConvId, convs, onNew, onDelete, onD
                 ? <span className="type-icon" title="Build & Run project"><Icon name="code" size={13} /></span>
                 : <span className="type-dot" aria-hidden="true" />)}
               <span className="t">{c.title.replace(/^🔨\s*/, '') || 'New conversation'}</span>
+              {!selMode && <span className="conv-date">{relDate(c.created_at)}</span>}
               {!selMode && <span className="del" onClick={e => { e.stopPropagation(); onDelete(c.id) }}><Icon name="trash" size={15} /></span>}
             </button>
           ))}
           {rows.length === 0 && <div className="sect">No chats yet</div>}
         </div>
+        {/* mobile drawer: layered bottom fade + floating New Chat pill and avatar */}
+        <div className="drawer-fade" aria-hidden="true" />
+        <div className="drawer-bottom">
+          <button className="drawer-fab" onClick={() => { onNew(); close() }}>
+            <Icon name="pen" size={21} /><span>New Chat</span>
+          </button>
+          <button className="drawer-ava" aria-label="Your profile" onClick={() => { onProfile(); close() }}>
+            {avatar ? <img src={avatar} alt="" /> : <span>{(name || 'P').slice(0, 1).toUpperCase()}</span>}
+          </button>
+        </div>
+        {/* desktop: profile entry anchored at the bottom of the sidebar */}
         <div className="drawer-profile" role="button" tabIndex={0}
-          onClick={() => go('you')}
-          onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') go('you') }}>
-          <div className="dp-ava">{(name || 'P').slice(0, 1).toUpperCase()}</div>
+          onClick={onProfile}
+          onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') onProfile() }}>
+          {avatar ? <img className="dp-ava img" src={avatar} alt="" />
+            : <div className="dp-ava">{(name || 'P').slice(0, 1).toUpperCase()}</div>}
           <div className="dp-meta"><div className="dp-name">{name || 'Profile'}</div></div>
           <button className="iconbtn plain" aria-label="Settings" onClick={e => { e.stopPropagation(); go('settings') }}><Icon name="gear" size={19} /></button>
         </div>
@@ -1197,20 +1245,144 @@ function SoonPanel({ title, body }: { title: string; body: string }) {
   return (<div className="panel"><h2>{title}</h2><p className="desc">{body}</p></div>)
 }
 
-const PLUGINS: { t: string; d: string }[] = [
-  { t: 'Calculator', d: 'Quick math inside chat.' },
-  { t: 'Notes', d: 'Save and recall notes.' },
-  { t: 'Files', d: 'Attach and read files.' },
-  { t: 'Code', d: 'Run code snippets.' },
-  { t: 'Search', d: 'Look things up on the web.' },
-  { t: 'Calendar', d: 'Events and reminders.' },
-  { t: 'Goals', d: 'Track progress over time.' },
-]
-function PluginsPanel() {
+/* ---------- Plugins page: MCP server connections (stdio + HTTP) ---------- */
+type McpTool = { name: string; description?: string }
+type McpRow = {
+  id: string; name: string; transport: 'stdio' | 'http'; command: string; args: string[]
+  url: string; has_headers: boolean; enabled: boolean; status: string
+  tools: McpTool[]; last_error: string | null; connected: boolean
+}
+function PluginsPanel({ onBack }: { onBack: () => void }) {
+  const [rows, setRows] = useState<McpRow[]>([])
+  const [name, setName] = useState('')
+  const [transport, setTransport] = useState<'stdio' | 'http'>('stdio')
+  const [command, setCommand] = useState('')
+  const [argsStr, setArgsStr] = useState('')
+  const [url, setUrl] = useState('')
+  const [hk, setHk] = useState('')
+  const [hv, setHv] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null)
+  const [open, setOpen] = useState<string | null>(null)
+  const load = () =>
+    api(`/mcp/${USER}`).then(d => setRows((d as McpRow[]) ?? [])).catch(() => { /* offline */ })
+  useEffect(() => { load() }, [])
+  async function connect() {
+    if (!name.trim() || busy) return
+    setBusy(true); setMsg(null)
+    try {
+      const body = transport === 'stdio'
+        ? { name: name.trim(), transport, command: command.trim(),
+            args: argsStr.trim() ? argsStr.trim().split(/\s+/) : [] }
+        : { name: name.trim(), transport, url: url.trim(),
+            headers: hk.trim() && hv ? { [hk.trim()]: hv } : {} }
+      const out = await api(`/mcp/${USER}`, { method: 'POST', body: JSON.stringify(body) }) as McpRow
+      await load()
+      if (out.last_error) setMsg({ ok: false, text: `${out.name}: ${out.last_error}` })
+      else setMsg({ ok: true, text: `${out.name}: connected — ${out.tools.length} tool${out.tools.length === 1 ? '' : 's'}.` })
+      if (!out.last_error) { setName(''); setCommand(''); setArgsStr(''); setUrl(''); setHk(''); setHv('') }
+    } catch (e) {
+      setMsg({ ok: false, text: e instanceof Error ? e.message : 'Connection failed.' })
+    }
+    setBusy(false)
+  }
+  async function reconnect(row: McpRow) {
+    setBusy(true); setMsg(null)
+    try {
+      const out = await api(`/mcp/${USER}/${row.id}/reconnect`, { method: 'POST' }) as McpRow
+      await load()
+      if (out.last_error) setMsg({ ok: false, text: `${out.name}: ${out.last_error}` })
+      else setMsg({ ok: true, text: `${out.name}: connected.` })
+    } catch (e) {
+      setMsg({ ok: false, text: e instanceof Error ? e.message : 'Reconnect failed.' })
+    }
+    setBusy(false)
+  }
+  async function remove(row: McpRow) {
+    setBusy(true); setMsg(null)
+    try {
+      await api(`/mcp/${USER}/${row.id}`, { method: 'DELETE' })
+      await load()
+      setMsg({ ok: true, text: `${row.name} removed.` })
+    } catch (e) {
+      setMsg({ ok: false, text: e instanceof Error ? e.message : 'Delete failed.' })
+    }
+    setBusy(false)
+  }
+  const canConnect = !!name.trim() && !busy && (transport === 'stdio' ? !!command.trim() : !!url.trim())
   return (
-    <div className="panel"><h2>Plugins</h2>
-      {PLUGINS.map(p => (<div key={p.t} className="plugrow"><div className="dp-name">{p.t}</div><div className="dp-sub">{p.d}</div></div>))}
-    </div>
+    <div className="panel"><div className="panel-inner">
+      <button className="pf-back" onClick={onBack} aria-label="Back to profile"><Icon name="arrowleft" size={18} /> Profile</button>
+      <h2>Plugins</h2>
+      <p className="desc">Connect MCP servers so AZX can call their tools in chat. stdio commands run on the backend host.</p>
+      <div className="mcp-card">
+        <div className="lab">Name</div>
+        <input className="namepill" value={name} maxLength={40} placeholder="e.g. echo-server"
+          aria-label="Server name" onChange={e => { setName(e.target.value); setMsg(null) }} />
+        <div className="lab">Transport</div>
+        <Seg options={['stdio', 'HTTP']} value={transport === 'stdio' ? 'stdio' : 'HTTP'}
+          onPick={v => setTransport(v === 'stdio' ? 'stdio' : 'http')} />
+        {transport === 'stdio' ? (<>
+          <div className="lab">Command</div>
+          <input className="namepill" value={command} maxLength={500} placeholder="e.g. python3 /path/to/server.py"
+            aria-label="Command" onChange={e => { setCommand(e.target.value); setMsg(null) }} />
+          <div className="lab">Arguments</div>
+          <input className="namepill" value={argsStr} maxLength={2000} placeholder="Optional — space separated"
+            aria-label="Arguments" onChange={e => { setArgsStr(e.target.value); setMsg(null) }} />
+        </>) : (<>
+          <div className="lab">Endpoint URL</div>
+          <input className="namepill" value={url} maxLength={2000} placeholder="https://example.com/mcp"
+            aria-label="Endpoint URL" onChange={e => { setUrl(e.target.value); setMsg(null) }} />
+          <div className="lab">Auth header <span className="mcp-opt">(optional)</span></div>
+          <div className="mcp-hdr">
+            <input value={hk} maxLength={128} placeholder="Header name" aria-label="Header name"
+              onChange={e => { setHk(e.target.value); setMsg(null) }} />
+            <input value={hv} maxLength={4096} placeholder="Value (stored server-side, never shown again)" aria-label="Header value"
+              onChange={e => { setHv(e.target.value); setMsg(null) }} />
+          </div>
+        </>)}
+        <div className="mcp-actions">
+          <button className="mini primary" disabled={!canConnect} onClick={connect}>
+            {busy ? 'Working…' : 'Connect'}
+          </button>
+          {msg && <span className={`byok-msg${msg.ok ? ' ok' : ' err'}`}>{msg.text}</span>}
+        </div>
+      </div>
+      {rows.length === 0 && !msg && (
+        <p className="mcp-empty">No MCP servers yet. Add one above — try a local stdio server or a remote HTTP endpoint.</p>
+      )}
+      {rows.map(row => (
+        <div className="mcp-row" key={row.id}>
+          <button className="mcp-head" onClick={() => setOpen(open === row.id ? null : row.id)}
+            aria-expanded={open === row.id}>
+            <span className={`mcp-dot${row.connected ? ' on' : row.status === 'error' || row.last_error ? ' err' : ''}`} />
+            <span className="mcp-id">
+              <span className="dp-name">{row.name}</span>
+              <span className="dp-sub">
+                {row.transport === 'stdio' ? row.command || 'stdio' : row.url} · {row.tools.length} tool{row.tools.length === 1 ? '' : 's'}
+              </span>
+            </span>
+            <span className="mcp-chev"><Icon name="chev" size={16} /></span>
+          </button>
+          {row.last_error && <div className="mcp-err">{row.last_error}</div>}
+          {open === row.id && (
+            <div className="mcp-detail">
+              {row.tools.length > 0 ? row.tools.map(t => (
+                <div className="mcp-tool" key={t.name}>
+                  <code>{t.name}</code>
+                  <span>{t.description || 'No description'}</span>
+                </div>
+              )) : <div className="mcp-sub">No tools listed.</div>}
+              {row.has_headers && <div className="mcp-sub">Auth header saved (not displayed).</div>}
+              <div className="mcp-rowacts">
+                <button className="mini" disabled={busy} onClick={() => reconnect(row)}>Reconnect</button>
+                <button className="mini danger" disabled={busy} onClick={() => remove(row)}>Delete</button>
+              </div>
+            </div>
+          )}
+        </div>
+      ))}
+    </div></div>
   )
 }
 
@@ -1218,6 +1390,77 @@ function PluginsPanel() {
 /* Real device viewport sizes (CSS px) for the preview aspect switcher —
    the frame renders at exact 1:1 device size, scaled to fit the panel. */
 const DEV_SIZES = { mobile: [390, 844], tablet: [820, 1180], desktop: [1440, 900] } as const
+/* ---------- Build & Run landing: screenshot-matched hero ----------
+   Almost-white canvas, centered two-line headline + subtitle, compact
+   light composer (wave dictation + circular send), peach glow beneath.
+   Only shown for a NEW project (empty log, not busy) — submits through
+   the existing run() pipeline and drops into the normal workspace. */
+function BuildLanding({ prompt, setPrompt, onSubmit }: {
+  prompt: string; setPrompt: React.Dispatch<React.SetStateAction<string>>; onSubmit: () => void
+}) {
+  const dictation = useDictation(t => setPrompt(p => (p.trimEnd() ? p.trimEnd() + ' ' : '') + t))
+  const vc = dictation
+  const taRef = useRef<HTMLTextAreaElement>(null)
+  const canSend = !!prompt.trim()
+  const voicing = vc.phase !== 'idle'
+  const autosize = () => {
+    const el = taRef.current; if (!el) return
+    el.style.height = 'auto'
+    el.style.height = Math.min(el.scrollHeight, 96) + 'px'
+  }
+  useEffect(() => { autosize() }, [prompt])
+  const submit = () => { if (!canSend) return; onSubmit() }
+  return (
+    <div className="landing">
+      <div className="lhero">
+        <div className="lglow" aria-hidden="true" />
+        <h1 className="ltitle">What are we building{' '}<br className="hero-br" />today?</h1>
+        <p className="lsub">Describe your app idea and watch it come to life.</p>
+        {voicing ? (
+          <div className={`lvoice${vc.phase === 'error' ? ' err' : ''}`} role="status" aria-live="polite">
+            {vc.phase === 'listening' && (
+              <span className="vbars" aria-hidden="true">
+                {vc.levels.map((a, i) => (
+                  <i key={i} style={{ height: `${Math.round(4 + a * 24)}px` }} />
+                ))}
+              </span>
+            )}
+            <span className="vlabel">
+              {vc.phase === 'requesting' && 'Starting microphone…'}
+              {vc.phase === 'listening' && (vc.interim || 'Listening…')}
+              {vc.phase === 'transcribing' && 'Transcribing…'}
+              {vc.phase === 'error' && (vc.error || 'Dictation failed.')}
+            </span>
+            {vc.phase !== 'transcribing' && (
+              <button type="button" className="vstop" aria-label={vc.phase === 'error' ? 'Dismiss' : 'Stop dictation'}
+                onClick={vc.phase === 'error' ? vc.dismissError : vc.toggle}>
+                <Icon name="stop" size={12} />
+              </button>
+            )}
+          </div>
+        ) : (
+          <div className="lcomp">
+            <textarea ref={taRef} rows={1} value={prompt}
+              aria-label="Describe the app you want to build"
+              placeholder="Build me a todo app with categories and dark mode..."
+              onChange={e => { setPrompt(e.target.value) }}
+              onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); submit() } }} />
+            <button type="button" className="lwave" aria-label="Dictate prompt"
+              title={vc.supported ? 'Dictate prompt' : 'Voice input is not supported in this browser'}
+              disabled={!vc.supported} onClick={vc.toggle}>
+              <Icon name="wave" size={15} />
+            </button>
+            <button type="button" className={`lsend${canSend ? ' ready' : ''}`}
+              aria-label="Send prompt" onClick={submit} disabled={!canSend}>
+              <Icon name="up" size={14} />
+            </button>
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}
+
 /* ---------- dark browser preview modal (shared by Build & Run + 🔨 chats).
    Traffic lights are real: red = close, yellow = minimize, green = fullscreen
    (click again to exit). External links open in a new tab instead of turning
@@ -1449,19 +1692,20 @@ function BuildPanel({ seed, onConsumed, conversationId, onBuilt, onNewBuild }: {
       </div>
     )
   }
-  /* no site yet → describe-and-build screen */
+  /* no site yet → fresh project lands on the hero screen;
+     if there's already a chat log (failed build / chat reply), keep the
+     thread view so the history and retry composer stay visible */
   if (!html) {
+    if (!busy && log.length === 0) {
+      return <BuildLanding prompt={prompt} setPrompt={setPrompt} onSubmit={() => void run()} />
+    }
     const msgs: Msg[] = log.map(l => l.startsWith('$ ')
       ? { role: 'user', content: l.slice(2) }
       : { role: 'assistant', content: l })
     return (
       <ThreadShell msgs={log.length ? msgs : []} busy={busy}
         status={busy ? `${phase ?? 'starting…'}${elapsed > 0 ? ` ${elapsed}s` : ''}` : 'Working…'}
-        empty={<div className="buildempty">
-          <div className="be-ic" aria-hidden="true"><Icon name="code" size={22} /></div>
-          <h1>Describe your business. Get a live site.</h1>
-          <p>AZX codes it, you preview it, then publish with one click.</p>
-        </div>}
+        empty={null}
         composer={
           <ComposerShell
             field={
@@ -1738,15 +1982,136 @@ function MarketPanel({ onUse }: { onUse: (it: MarketItem) => void }) {
   )
 }
 
-function YouPanel({ name, onName }: { name: string; onName: (v: string) => void }) {
+/* ---------- profile ---------- */
+function ProfilePanel({ name, avatar, setAvatar, onName, onBack, onPersonality, onNav }: {
+  name: string; avatar: string; setAvatar: (v: string) => void; onName: (v: string) => void
+  onBack: () => void; onPersonality: () => void; onNav: (v: View) => void
+}) {
+  /* Account/Support rows open real sub-pages (back returns here) — no popups */
+  type PfSub = 'workspace' | 'subscription' | 'usage' | 'terms' | 'about'
+  const [sub, setSub] = useState<PfSub | null>(null)
+  const SUBS: Record<PfSub, { title: string; body: string }> = {
+    workspace: { title: 'Workspace', body: 'You are working in your Personal workspace. This build ships a single workspace, so there is nothing to switch between yet.' },
+    subscription: { title: 'Subscription', body: 'You are on the Free Plan. Paid plans are not available in this build.' },
+    usage: { title: 'Usage and limits', body: 'There is no usage meter in this version, so there are no limits to show. When limits exist, they will appear here.' },
+    terms: { title: 'Terms & Conditions', body: 'Terms and Conditions have not been published yet. There is nothing to accept or review at this time.' },
+    about: { title: 'About AZX', body: 'AZX · Version 1.1 pre-release. Built with heart by team NACX.' },
+  }
+  const [err, setErr] = useState('')
+  const [busy, setBusy] = useState(false)
+  const fileRef = useRef<HTMLInputElement>(null)
+  /* avatar upload: validate → read → downscale → PATCH the profile record */
+  async function pickAvatar(file: File) {
+    setErr('')
+    if (!/^image\/(png|jpeg|webp)$/.test(file.type)) { setErr('Choose a PNG, JPEG, or WebP image.'); return }
+    if (file.size > 2 * 1024 * 1024) { setErr('Image must be under 2 MB.'); return }
+    setBusy(true)
+    try {
+      const dataUrl = await new Promise<string>((res, rej) => {
+        const r = new FileReader()
+        r.onload = () => res(String(r.result))
+        r.onerror = () => rej(new Error('Could not read that file.'))
+        r.readAsDataURL(file)
+      })
+      const small = await new Promise<string>((res, rej) => {
+        const img = new Image()
+        img.onload = () => {
+          const s = Math.min(1, 256 / Math.max(img.width, img.height))
+          const c = document.createElement('canvas')
+          c.width = Math.max(1, Math.round(img.width * s))
+          c.height = Math.max(1, Math.round(img.height * s))
+          const ctx = c.getContext('2d')
+          if (!ctx) { rej(new Error('Canvas unavailable.')); return }
+          ctx.drawImage(img, 0, 0, c.width, c.height)
+          res(c.toDataURL('image/jpeg', 0.85))
+        }
+        img.onerror = () => rej(new Error('That file is not a readable image.'))
+        img.src = dataUrl
+      })
+      await api(`/profile/${USER}`, { method: 'PATCH', body: JSON.stringify({ avatar_data: small }) })
+      setAvatar(small)
+    } catch (e) { setErr(e instanceof Error ? e.message : 'Could not save the photo.') }
+    setBusy(false)
+  }
+  const rowBtn = (icon: keyof typeof PATHS, title: string, sub2: string, onClick: () => void) => (
+    <button className="pf-row" onClick={onClick}>
+      <span className="pf-ic"><Icon name={icon} size={23} /></span>
+      <span className="pf-txt"><span className="pf-title">{title}</span><span className="pf-sub">{sub2}</span></span>
+      <span className="pf-chev" aria-hidden="true"><Icon name="chev" size={16} /></span>
+    </button>
+  )
+  if (sub) {
+    const s = SUBS[sub]
+    return (
+      <div className="panel pf-panel"><div className="panel-inner">
+        <button className="pf-back" onClick={() => setSub(null)} aria-label="Back to profile"><Icon name="arrowleft" size={18} /> Profile</button>
+        <div className="pf-sub-page">
+          <h2>{s.title}</h2>
+          <p className="desc">{s.body}</p>
+        </div>
+      </div></div>
+    )
+  }
+  return (
+    <div className="panel pf-panel"><div className="panel-inner">
+      <button className="pf-back" onClick={onBack} aria-label="Back"><Icon name="arrowleft" size={18} /> Back</button>
+      <div className="pf-id">
+        <button className="pf-ava" aria-label="Change photo" disabled={busy} onClick={() => fileRef.current?.click()}>
+          {avatar ? <img src={avatar} alt="" />
+            : <span className="pf-ava-l">{(name || 'P').slice(0, 1).toUpperCase()}</span>}
+          <span className="pf-pencil"><Icon name="pen" size={14} /></span>
+        </button>
+        <input ref={fileRef} type="file" accept="image/png,image/jpeg,image/webp" hidden
+          onChange={e => { const f = e.target.files?.[0]; e.target.value = ''; if (f) pickAvatar(f) }} />
+        <input className="pf-name" value={name} maxLength={32} placeholder="Your name"
+          aria-label="Your name"
+          onChange={e => { onName(e.target.value); try { localStorage.setItem('ashtra-name', e.target.value) } catch { /* quota */ } }}
+          onBlur={() => api(`/profile/${USER}`, { method: 'PATCH', body: JSON.stringify({ display_name: name }) }).catch(() => { /* offline */ })} />
+        <button className="pf-plan" onClick={() => setSub('subscription')}>
+          Free Plan <Icon name="chev" size={13} />
+        </button>
+        {err && <div className="pf-err">{err}</div>}
+      </div>
+      <div className="pf-sec">My AZX</div>
+      <div className="pf-group">
+        {rowBtn('openbook', 'Personality', 'How AZX adapts to you', onPersonality)}
+        {rowBtn('brain', 'Memory', 'What AZX remembers about you', () => onNav('memory'))}
+        {rowBtn('plugin', 'Plugins', 'Tools and integrations', () => onNav('plugins'))}
+      </div>
+      <div className="pf-sec">Account</div>
+      <div className="pf-group">
+        {rowBtn('briefcase', 'Workspace', 'Personal', () => setSub('workspace'))}
+        {rowBtn('plusbox', 'Subscription', 'Free Plan', () => setSub('subscription'))}
+        {rowBtn('chart', 'Usage and limits', "What's included in your plan", () => setSub('usage'))}
+      </div>
+      <div className="pf-sec">Support</div>
+      <div className="pf-group">
+        {rowBtn('docx', 'Terms & Conditions', '', () => setSub('terms'))}
+        {rowBtn('info', 'About AZX', 'v1.1 pre-release', () => setSub('about'))}
+      </div>
+    </div></div>
+  )
+}
+
+function PersonalityPanel({ name, onName, onBack }: {
+  name: string; onName: (v: string) => void; onBack: () => void
+}) {
   const [model, setModel] = useState<{
     traits: Record<string, string>; adaptation: Record<string, string | number>;
     directives: string; recent_behaviour_patterns: string[]
   } | null>(null)
+  const [sys, setSys] = useState('')
+  const [sysBusy, setSysBusy] = useState(false)
+  const [sysMsg, setSysMsg] = useState<{ ok: boolean; text: string } | null>(null)
   async function load() {
     try { setModel(await api(`/profile/${USER}/model`)) } catch { /* offline */ }
   }
-  useEffect(() => { load() }, [])
+  useEffect(() => {
+    load()
+    api(`/profile/${USER}`)
+      .then((d: { custom_system_prompt?: string | null }) => setSys(d.custom_system_prompt || ''))
+      .catch(() => { /* offline */ })
+  }, [])
   function patch(field: string, value: string) {
     /* optimistic: switch flips instantly, server syncs in the background */
     setModel(m => (m ? { ...m, traits: { ...m.traits, [field]: value } } : m))
@@ -1754,14 +2119,52 @@ function YouPanel({ name, onName }: { name: string; onName: (v: string) => void 
       .then(() => load())
       .catch(() => load()) /* revert to server truth on failure */
   }
+  function nameChanged(v: string) {
+    onName(v)
+    try { localStorage.setItem('ashtra-name', v) } catch { /* quota */ }
+  }
+  function nameCommitted() {
+    api(`/profile/${USER}`, { method: 'PATCH', body: JSON.stringify({ display_name: name }) })
+      .catch(() => { /* offline — localStorage copy still applies */ })
+  }
+  async function saveSys(clear: boolean) {
+    setSysBusy(true); setSysMsg(null)
+    const value = clear ? '' : sys
+    try {
+      await api(`/profile/${USER}`, { method: 'PATCH', body: JSON.stringify({ custom_system_prompt: value }) })
+      setSys(value)
+      setSysMsg({ ok: true, text: clear ? 'Cleared.' : 'Saved — applies to chat, builds, and research.' })
+    } catch (e) {
+      setSysMsg({ ok: false, text: e instanceof Error ? e.message : 'Save failed.' })
+    }
+    setSysBusy(false)
+  }
   const t = model?.traits ?? {}
   return (
     <div className="panel"><div className="panel-inner">
-      <h2>Profile</h2>
+      <button className="pf-back" onClick={onBack} aria-label="Back to profile"><Icon name="arrowleft" size={18} /> Profile</button>
+      <h2>Personality</h2>
       <p className="desc">How AZX adapts to you. Confidence {String(model?.adaptation.confidence ?? '…')}.</p>
       <div className="lab">What should we call you?</div>
       <input className="namepill" value={name} maxLength={32} placeholder="Type a name…"
-        onChange={e => { onName(e.target.value); try { localStorage.setItem('ashtra-name', e.target.value) } catch { /* quota */ } }} />
+        aria-label="Your name"
+        onChange={e => nameChanged(e.target.value)}
+        onBlur={nameCommitted} />
+      <div className="lab">System prompt</div>
+      <textarea className="sysbox" value={sys} maxLength={4000} spellCheck={false}
+        aria-label="System prompt"
+        placeholder="Optional — instructions AZX follows in every reply (chat, Build & Run, research). Example: Always answer in French. Cite sources."
+        onChange={e => { setSys(e.target.value); setSysMsg(null) }} />
+      <div className="sysrow">
+        <span className={`syshint${sysMsg && !sysMsg.ok ? ' err' : ''}`}>
+          {sysMsg ? sysMsg.text : `${sys.length}/4000`}
+        </span>
+        <span className="sysacts">
+          <button className="mini" disabled={sysBusy || !sys} onClick={() => saveSys(true)}>Clear</button>
+          <button className="mini primary" disabled={sysBusy}
+            onClick={() => saveSys(false)}>{sysBusy ? 'Saving…' : 'Save'}</button>
+        </span>
+      </div>
       <div className="lab">Depth</div>
       <Seg options={['Short', 'Balanced', 'Deep']}
         value={({ concise: 'Short', balanced: 'Balanced', detailed: 'Deep' } as Record<string, string>)[t.explanation_depth ?? 'balanced'] ?? 'Balanced'}
@@ -2085,6 +2488,28 @@ export default function App() {
   const [userName, setUserName] = useState(() => {
     try { return localStorage.getItem('ashtra-name') || '' } catch { return '' }
   })
+  /* account avatar (dataURL persisted on the profile record) */
+  const [avatar, setAvatar] = useState('')
+  useEffect(() => {
+    api(`/profile/${USER}`).then((d: { avatar_data?: string | null; display_name?: string | null }) => {
+      if (d?.avatar_data) setAvatar(d.avatar_data)
+      const serverName = (d?.display_name || '').trim()
+      if (serverName) {
+        setUserName(serverName)
+        try { localStorage.setItem('ashtra-name', serverName) } catch { /* quota */ }
+      } else {
+        /* bootstrap: push a locally-set name up so builds see it too */
+        const local = userName.trim()
+        if (local)
+          api(`/profile/${USER}`, { method: 'PATCH', body: JSON.stringify({ display_name: local }) })
+            .catch(() => { /* offline */ })
+      }
+    }).catch(() => { /* offline */ })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+  /* profile back button returns to whichever screen opened it */
+  const prevViewRef = useRef<View>('chat')
+  const openProfile = () => { prevViewRef.current = view; setView('you') }
   /* fresh Build & Run chat seeded from the chat nudge (bump key → remount) */
   const [buildSeed, setBuildSeed] = useState<{ k: number; p: string }>({ k: 0, p: '' })
   /* open a saved build chat in the Build & Run workspace (survives refresh) */
@@ -2252,7 +2677,8 @@ export default function App() {
         convs={convs} onNew={() => { if (sessions['new']?.busy) return; setConvId(null); setView('chat') }}
         onDelete={(id) => setConfirmDel(id)} onDeleteMany={delConvs}
         open={sideOpen} close={() => setSideOpen(false)}
-        name={userName} onBuild={startFreshBuild} onOpenBuild={openBuildConv} />
+        name={userName} avatar={avatar} onBuild={startFreshBuild} onOpenBuild={openBuildConv}
+        onProfile={openProfile} />
       <div className="main">
         <div className="topbar">
           <button className="burger" style={{ visibility: sideOpen ? 'hidden' : 'visible', opacity: sideOpen ? 0 : 1 }}
@@ -2277,9 +2703,13 @@ export default function App() {
               </div>
             )}
           </div>
+          <button className="top-newchat" aria-label="New chat"
+            onClick={() => { if (sessions['new']?.busy) return; setConvId(null); setView('chat') }}>
+            <Icon name="pen" size={20} />
+          </button>
           <button className="top-avatar" aria-label="Your profile"
-            onClick={() => setView('you')}>
-            {userName ? userName.slice(0, 1).toUpperCase() : 'P'}
+            onClick={openProfile}>
+            {avatar ? <img src={avatar} alt="" /> : (userName ? userName.slice(0, 1).toUpperCase() : 'P')}
           </button>
         </div>
         {view === 'chat' && <Chat key={sessKey} convId={convId} sessKey={sessKey} sess={sess}
@@ -2294,7 +2724,7 @@ export default function App() {
           }} />}
         {view === 'library' && <LibraryPanel convs={convs} convId={convId} setConvId={setConvId} setView={setView} onDelete={(id) => setConfirmDel(id)} refresh={refreshConvs} onOpenBuild={openBuildConv} />}
         {view === 'projects' && <SoonPanel title="Projects" body="Project workspaces are coming soon." />}
-        {view === 'plugins' && <PluginsPanel />}
+        {view === 'plugins' && <PluginsPanel onBack={() => setView('you')} />}
         {view === 'build' && <BuildPanel key={buildSeed.k} seed={buildSeed.p}
           conversationId={buildConvId}
           onConsumed={() => setBuildSeed(s => ({ ...s, p: '' }))}
@@ -2312,7 +2742,13 @@ export default function App() {
         )}
         {view === 'memory' && <MemoryPanel />}
         {view === 'answer' && <AnswerPanel />}
-        {view === 'you' && <YouPanel name={userName} onName={setUserName} />}
+        {view === 'you' && <ProfilePanel name={userName} avatar={avatar} setAvatar={setAvatar}
+          onName={setUserName}
+          onBack={() => setView(prevViewRef.current && prevViewRef.current !== 'you' ? prevViewRef.current : 'chat')}
+          onPersonality={() => setView('personality')} onNav={setView} />}
+        {view === 'personality' && <PersonalityPanel
+          name={userName} onName={setUserName}
+          onBack={() => setView('you')} />}
         {view === 'settings' && <SettingsPanel fs={fs} setFs={setFs} onExport={exportChat}
           canExport={(sessions[convId ?? 'new']?.msgs ?? []).some(m => (m.content || '').trim())} />}
         {view === 'market' && <MarketPanel onUse={it => {
