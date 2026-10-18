@@ -15,6 +15,12 @@
        ctext=<words> click the first button containing the words
         click=<sel>   click a CSS selector inside the app
         click2=<sel>  second selector click (after ctext; default 4300ms)
+        inject=<js>   eval JS in the app frame right after its load event
+                      (e.g. a fake window.SpeechRecognition for voice tests);
+                      a space is typed right after to force a re-render so
+                      the mic button (hidden when unsupported) appears
+        probe=<sel>   at 6500ms put the element's value/text into document.title
+                      as probe[<sel>]=... (dump-dom friendly)
         wait=<ms>     extra settle time before capture (default 9000 virtual ms) */
   const q = new URLSearchParams(location.search)
   const W = +(q.get('W') || 560), H = +(q.get('H') || 1000)
@@ -26,6 +32,16 @@
   f.style.height = h + 'px'
   f.style.left = Math.round((window.innerWidth - w) / 2) + 'px'
   f.style.top = Math.round((window.innerHeight - h) / 2) + 'px'
+  /* seed=<key> seedval=<json>: pre-seed app localStorage BEFORE the app
+     mounts (about:blank frame shares our origin). Lets screenshots open
+     post-build screens (Build & Run preview overlay) without a live build. */
+  if (q.get('seed') && q.get('seedval')) {
+    f.src = 'about:blank'
+    f.addEventListener('load', () => {
+      try { f.contentWindow.localStorage.setItem(q.get('seed'), q.get('seedval')) } catch (e) { /* ignore */ }
+      f.src = '/'
+    }, { once: true })
+  }
   window.addEventListener('load', () => setTimeout(() => {
     try {
       const d = f.contentDocument
@@ -60,11 +76,33 @@
     return true
   }
   window.addEventListener('load', () => {
+    if (q.get('inject')) {
+      try { f.contentWindow.eval(q.get('inject')) } catch (e) { /* ignore */ }
+      /* force one re-render (input state change) so components that read
+         window.SpeechRecognition at render time pick the stub up */
+      setTimeout(() => typeText(' '), 400)
+    }
     setTimeout(() => { if (q.get('click')) { const d = frame(); d && d.querySelector(q.get('click'))?.click() } }, 2200)
     setTimeout(() => { if (q.get('ctext')) clickByText(q.get('ctext')) }, 2700)
     setTimeout(() => { if (q.get('q')) typeText(q.get('q')) }, 3200)
     setTimeout(() => { if (q.get('enter')) pressEnter() }, 3800)
     setTimeout(() => { if (q.get('click2')) { const d = frame(); d && d.querySelector(q.get('click2'))?.click() } }, 4300)
+    setTimeout(() => { if (q.get('click3')) { const d = frame(); d && d.querySelector(q.get('click3'))?.click() } }, 5600)
+    setTimeout(() => {
+      const sel = q.get('probe')
+      if (!sel) return
+      let v
+      if (sel.startsWith('storage:')) {
+        try { v = f.contentWindow.localStorage.getItem(sel.slice(8)) || 'NULL' } catch (e) { v = 'ERR' }
+        v = 'len=' + String(v).length + ' head=' + String(v).slice(0, 40)
+      } else {
+        const d = frame()
+        const el = d && d.querySelector(sel)
+        v = 'NOTFOUND'
+        if (el) v = (el.value != null && String(el.value)) || (el.textContent || '').trim().slice(0, 120) || 'EMPTY'
+      }
+      document.title = 'probe[' + sel + ']=' + v
+    }, 6500)
   })
 </script>
 </body></html>

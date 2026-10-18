@@ -190,6 +190,7 @@ const PATHS: Record<string, ReactNode> = {
   docx: (<><rect x="4.5" y="3" width="15" height="18" rx="2" /><path d="M8.5 8.5h7M8.5 12h7M8.5 15.5h4" /></>),
   info: (<><circle cx="12" cy="12" r="9" /><path d="M12 11v5.5" /><path d="M12 7.5h.01" /></>),
   arrowleft: (<><path d="M19 12H5" /><path d="m11 5-7 7 7 7" /></>),
+  refresh: (<><path d="M21 12a9 9 0 1 1-2.64-6.36" /><path d="M21 3v6h-6" /></>),
 }
 function Icon({ name, size = 17 }: { name: keyof typeof PATHS; size?: number }) {
   return (
@@ -355,13 +356,34 @@ function useDictation(onText: (t: string) => void) {
   const ctxRef = useRef<AudioContext | null>(null)
   const rafRef = useRef<number | null>(null)
   const phaseRef = useRef<VoicePhase>('idle')
-  /* finals buffer — transcript is flushed into the draft only when done */
+  /* finals buffer: spoken words land in the draft as they finalize (never
+     wait for onend, which some browsers delay or drop). flushedRef tracks
+     how much of the buffer was already sent so end/error flush only the     remainder — no lost words, no duplicates. */
   const finalsRef = useRef('')
+  const flushedRef = useRef(0)
+  const onTextRef = useRef(onText)
+  onTextRef.current = onText
+  /* bumps per session so a late onend/onerror from a previous recognition
+     can't clobber the phase or text of a newer one */
+  const sessionRef = useRef(0)
+  const stuckRef = useRef<number | null>(null)
   const w = typeof window !== 'undefined'
     ? window as unknown as { SpeechRecognition?: DictationCtor; webkitSpeechRecognition?: DictationCtor }
     : undefined
   const Ctor = w?.SpeechRecognition ?? w?.webkitSpeechRecognition
   const setPh = (p: VoicePhase) => { phaseRef.current = p; setPhase(p) }
+  const clearStuck = () => {
+    if (stuckRef.current !== null) { clearTimeout(stuckRef.current); stuckRef.current = null }
+  }
+  const flushRemainder = () => {
+    const raw = finalsRef.current, sent = flushedRef.current
+    if (raw.length > sent) {
+      const chunk = raw.slice(sent).trim()
+      if (chunk) onTextRef.current(chunk)
+    }
+    finalsRef.current = ''
+    flushedRef.current = 0
+  }
 
   const cleanup = () => {
     if (rafRef.current !== null) { cancelAnimationFrame(rafRef.current); rafRef.current = null }
@@ -370,7 +392,7 @@ function useDictation(onText: (t: string) => void) {
     streamRef.current?.getTracks().forEach(t => { try { t.stop() } catch { /* gone */ } })
     streamRef.current = null
   }
-  useEffect(() => () => { try { recRef.current?.stop() } catch { /* ignore */ } cleanup() }, [])
+  useEffect(() => () => { try { recRef.current?.stop() } catch { /* ignore */ } clearStuck(); cleanup() }, [])
 
   const startMeter = (stream: MediaStream) => {
     try {
@@ -403,8 +425,25 @@ function useDictation(onText: (t: string) => void) {
   }
 
   const stopAll = () => {
-    if (phaseRef.current === 'listening') setPh('transcribing')
-    else if (phaseRef.current === 'requesting') setPh('idle')
+    const ph = phaseRef.current
+    if (ph === 'transcribing') {
+      /* onend never arrived — the user pressed stop, finish now */
+      clearStuck(); flushRemainder(); cleanup(); setInterim('')
+      setLevels(new Array(VOICE_BARS).fill(0.06)); setPh('idle')
+      return
+    }
+    if (ph === 'listening') {
+      setPh('transcribing')
+      /* safety net: if onend never fires, flush what we have and go idle
+         instead of leaving the user stuck on "Transcribing…" */
+      clearStuck()
+      stuckRef.current = window.setTimeout(() => {
+        stuckRef.current = null
+        flushRemainder(); cleanup(); setInterim('')
+        setLevels(new Array(VOICE_BARS).fill(0.06))
+        if (phaseRef.current === 'transcribing') setPh('idle')
+      }, 4000)
+    } else if (ph === 'requesting') setPh('idle')
     try { recRef.current?.stop() } catch { /* ignore */ }
     cleanup()
     setInterim('')
@@ -419,8 +458,14 @@ function useDictation(onText: (t: string) => void) {
       return
     }
     setPh('requesting'); setError('')
+    setInterim('')
+    finalsRef.current = ''
+    flushedRef.current = 0
+    const sid = ++sessionRef.current
     navigator.mediaDevices.getUserMedia({ audio: true }).then(stream => {
-      if (phaseRef.current !== 'requesting') { stream.getTracks().forEach(t => t.stop()); return }
+      if (phaseRef.current !== 'requesting' || sessionRef.current !== sid) {
+        stream.getTracks().forEach(t => t.stop()); return
+      }
       streamRef.current = stream
       startMeter(stream)
       const rec = new Ctor()
@@ -429,6 +474,7 @@ function useDictation(onText: (t: string) => void) {
       rec.continuous = false
       rec.maxAlternatives = 1
       rec.onresult = (e: DictationEvent) => {
+        if (sessionRef.current !== sid) return
         let finals = '', inter = ''
         for (let i = e.resultIndex; i < e.results.length; i++) {
           const r = e.results[i]
@@ -436,35 +482,49 @@ function useDictation(onText: (t: string) => void) {
           if (r.isFinal) finals += t
           else inter += t
         }
-        if (finals) finalsRef.current += finals
-        setInterim(inter || finalsRef.current)
+        if (finals) {
+          /* words land in the draft as they finalize — don't wait for onend */
+          finalsRef.current += finals
+          const chunk = finalsRef.current.slice(flushedRef.current).trim()
+          if (chunk) {
+            onTextRef.current(chunk)
+            flushedRef.current = finalsRef.current.length
+          }
+        }
+        setInterim(inter)
       }
       rec.onerror = (ev: { error?: string }) => {
+        if (sessionRef.current !== sid) return
         const code = ev.error ?? ''
+        clearStuck()
         cleanup()
         setInterim('')
-        const partial = finalsRef.current.trim(); finalsRef.current = ''
-        if (partial) onText(partial)
+        setLevels(new Array(VOICE_BARS).fill(0.06))
+        flushRemainder() /* keep whatever was already spoken */
         if (code === 'not-allowed' || code === 'service-not-allowed') {
           setPh('error'); setError('Microphone permission denied — allow it in your browser settings.')
         } else if (code === 'no-speech') {
           setPh('error'); setError('No speech heard — try again.')
+        } else if (code === 'audio-capture') {
+          setPh('error'); setError('Microphone not found — check it is connected and try again.')
         } else {
           setPh('error'); setError(code ? `Dictation error: ${code}` : 'Dictation failed.')
         }
       }
       rec.onend = () => {
+        if (sessionRef.current !== sid) return
+        clearStuck()
         cleanup()
         setInterim('')
         setLevels(new Array(VOICE_BARS).fill(0.06))
-        const spoken = finalsRef.current.trim(); finalsRef.current = ''
-        if (spoken) onText(spoken)
+        flushRemainder()
         if (phaseRef.current !== 'error') setPh('idle')
       }
       recRef.current = rec
       setPh('listening')
       try { rec.start() } catch { cleanup(); setPh('error'); setError('Could not start dictation.') }
     }).catch(() => {
+      if (sessionRef.current !== sid) return
       setPh('error')
       setError('Microphone permission denied — allow it in your browser settings.')
     })
@@ -506,12 +566,11 @@ function ComposerShell({ lead, field, canSend, onSend, sendLabel, head, streamin
                   {vc.phase === 'transcribing' && 'Transcribing…'}
                   {vc.phase === 'error' && (vc.error || 'Dictation failed.')}
                 </span>
-                {vc.phase !== 'transcribing' && (
-                  <button type="button" className="vstop" aria-label="Stop dictation"
-                    onClick={vc.phase === 'error' ? vc.dismissError : vc.toggle}>
-                    <Icon name="stop" size={13} />
-                  </button>
-                )}
+                <button type="button" className="vstop"
+                  aria-label={vc.phase === 'error' ? 'Dismiss dictation error' : 'Stop dictation'}
+                  onClick={vc.phase === 'error' ? vc.dismissError : vc.toggle}>
+                  <Icon name="stop" size={13} />
+                </button>
               </div>
             </div>
           ) : (
@@ -776,7 +835,7 @@ function AssistantBody({ m, onAction }: { m: Msg; onAction: (cmd: string) => voi
 
 function Chat({ convId, sessKey, sess, patchSess, onNewConv, refreshSidebar, onDraft, isBuild, goBuild, name, onAnswer }: {
   convId: string | null; sessKey: string; sess: Sess
-  patchSess: (key: string, p: Partial<Sess>) => void
+  patchSess: (key: string, p: Partial<Sess> | ((prev: Sess) => Partial<Sess>)) => void
   onNewConv: (id: string) => void; refreshSidebar: () => void; onDraft: (title: string) => void
   isBuild?: boolean; goBuild: (prompt: string) => void
   name?: string; onAnswer?: () => void
@@ -1073,8 +1132,10 @@ function Chat({ convId, sessKey, sess, patchSess, onNewConv, refreshSidebar, onD
         onSend={() => send()} sendLabel="Send"
         streaming={streaming} onStop={stopGen}
         onVoice={t => {
-          const cur = input.trimEnd()
-          patchSess(sessKey, { input: (cur ? cur + ' ' : '') + t })
+          patchSess(sessKey, prev => {
+            const base = prev.input.trimEnd()
+            return { input: (base ? base + ' ' : '') + t }
+          })
           requestAnimationFrame(() => { taRef.current?.focus(); autosize() })
         }} />
       }
@@ -1391,6 +1452,10 @@ function PluginsPanel({ onBack }: { onBack: () => void }) {
 /* Real device viewport sizes (CSS px) for the preview aspect switcher —
    the frame renders at exact 1:1 device size, scaled to fit the panel. */
 const DEV_SIZES = { mobile: [390, 844], tablet: [820, 1180], desktop: [1440, 900] } as const
+/* device-bezel ring thickness (CSS border on .dev-*) — the iframe content
+   box stays the TRUE viewport; the frame wrapper must include the bezel so
+   the ring is never clipped */
+const DEV_BEZEL = { mobile: 8, tablet: 8, desktop: 5 } as const
 /* ---------- Build & Run landing: screenshot-matched hero ----------
    Almost-white canvas, centered two-line headline + subtitle, compact
    light composer (wave dictation + circular send), peach glow beneath.
@@ -1552,17 +1617,44 @@ function BuildPanel({ seed, onConsumed, conversationId, onBuilt, onNewBuild }: {
   useEffect(() => {
     try { localStorage.setItem('ashtra-aspect', aspect) } catch { /* quota */ }
   }, [aspect])
-  /* fullscreen preview: device at 1:1 scaled to the window, Esc closes */
+  /* fullscreen preview: device at true size, scaled to fit the overlay
+     container (measured via ResizeObserver — not window-minus-fudge math),
+     Esc closes. fsRev bumps remount the iframe for refresh. */
   const [fsScale, setFsScale] = useState(1)
+  const [fsRev, setFsRev] = useState(0)
+  const fsPrevRef = useRef<HTMLDivElement | null>(null)
+  const fsPillRef = useRef<HTMLDivElement | null>(null)
   useEffect(() => {
     if (mode !== 'preview') return
     const [w, h] = DEV_SIZES[aspect]
-    const fit = () => setFsScale(Math.min((window.innerWidth - 48) / w, (window.innerHeight - 120) / h, 1))
+    const bw = DEV_BEZEL[aspect] * 2
+    const fit = () => {
+      const el = fsPrevRef.current
+      if (!el) {
+        setFsScale(Math.min((window.innerWidth - 48) / (w + bw), (window.innerHeight - 120) / (h + bw), 1))
+        return
+      }
+      const cs = getComputedStyle(el)
+      const availW = el.clientWidth - (parseFloat(cs.paddingLeft) || 0) - (parseFloat(cs.paddingRight) || 0)
+      const availH = el.clientHeight - (parseFloat(cs.paddingTop) || 0) - (parseFloat(cs.paddingBottom) || 0)
+        - (fsPillRef.current?.offsetHeight ?? 44) - (parseFloat(cs.rowGap) || 12)
+      if (availW < 40 || availH < 40) return
+      setFsScale(Math.min(availW / (w + bw), availH / (h + bw), 1))
+    }
     fit()
+    let ro: ResizeObserver | null = null
+    if (typeof ResizeObserver !== 'undefined' && fsPrevRef.current) {
+      ro = new ResizeObserver(fit)
+      ro.observe(fsPrevRef.current)
+    }
     window.addEventListener('resize', fit)
     const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setMode('chat') }
     window.addEventListener('keydown', onKey)
-    return () => { window.removeEventListener('resize', fit); window.removeEventListener('keydown', onKey) }
+    return () => {
+      ro?.disconnect()
+      window.removeEventListener('resize', fit)
+      window.removeEventListener('keydown', onKey)
+    }
   }, [mode, aspect])
   /* build/edit progress: elapsed timer + live phase label */
   const [phase, setPhase] = useState<string | null>(null)
@@ -1787,24 +1879,26 @@ function BuildPanel({ seed, onConsumed, conversationId, onBuilt, onNewBuild }: {
         </div>}
         composer={<div className="bcomposer">{editComposer}</div>} />
       {mode === 'preview' && (
-        <div className="fsprev">
-          <div className="fspill glass">
+        <div className="fsprev" ref={fsPrevRef}>
+          <div className="fspill glass" ref={fsPillRef}>
             <PillSeg ariaLabel="Device size"
               options={['Mobile', 'Tablet', 'Desktop']}
               value={aspect === 'mobile' ? 'Mobile' : aspect === 'tablet' ? 'Tablet' : 'Desktop'}
               onChange={v => setAspect(v.toLowerCase() as 'mobile' | 'tablet' | 'desktop')} />
             <span className="aspect-dims">
-              {DEV_SIZES[aspect][0]}×{DEV_SIZES[aspect][1]}
-              {fsScale < 0.995 ? ` · ${Math.round(fsScale * 100)}%` : ''}
+              {DEV_SIZES[aspect][0]} × {DEV_SIZES[aspect][1]}
             </span>
+            <button className="fs-x" onClick={() => setFsRev(r => r + 1)} aria-label="Refresh preview">
+              <Icon name="refresh" size={14} />
+            </button>
             <button className="fs-x" onClick={() => setMode('chat')} aria-label="Close preview">
               <Icon name="x" size={15} />
             </button>
           </div>
           <div className="fsframe"
             style={{
-              width: Math.round(DEV_SIZES[aspect][0] * fsScale),
-              height: Math.round(DEV_SIZES[aspect][1] * fsScale),
+              width: Math.round((DEV_SIZES[aspect][0] + DEV_BEZEL[aspect] * 2) * fsScale),
+              height: Math.round((DEV_SIZES[aspect][1] + DEV_BEZEL[aspect] * 2) * fsScale),
             }}>
             <div className={`device dev-${aspect}`}
               style={{
@@ -1812,7 +1906,7 @@ function BuildPanel({ seed, onConsumed, conversationId, onBuilt, onNewBuild }: {
                 height: DEV_SIZES[aspect][1],
                 transform: `scale(${fsScale})`,
               }}>
-              <iframe title="fullscreen preview" srcDoc={html}
+              <iframe key={fsRev} title="fullscreen preview" srcDoc={html}
                 sandbox="allow-scripts allow-same-origin allow-popups allow-popups-to-escape-sandbox" />
             </div>
           </div>
@@ -2549,8 +2643,11 @@ export default function App() {
     window.addEventListener('pagehide', save)
     return () => { window.clearTimeout(t); window.removeEventListener('pagehide', save) }
   }, [sessions])
-  function patchSess(key: string, p: Partial<Sess>) {
-    setSessions(s => ({ ...s, [key]: { ...(s[key] ?? blankSess()), ...p } }))
+  function patchSess(key: string, p: Partial<Sess> | ((prev: Sess) => Partial<Sess>)) {
+    setSessions(s => {
+      const cur = s[key] ?? blankSess()
+      return { ...s, [key]: { ...cur, ...(typeof p === 'function' ? p(cur) : p) } }
+    })
   }
   function dropSess(key: string) {
     setSessions(s => {

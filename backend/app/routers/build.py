@@ -48,7 +48,16 @@ _SYS = ("You are a senior front-end developer. Output ONLY a complete single HTM
         "including its DESIGN CONTRACT and FUNCTIONALITY CONTRACT. "
         "Hard rules: every section fully implemented; never leave placeholder comments, "
         "TODOs, or empty script blocks — if a chart, animation, or function is required, "
-        "write the real working code; responsive on mobile; visually polished. "
+        "write the real working code; visually polished. "
+        "MOBILE-FIRST RULES (critical): design for a 390px-wide phone FIRST, then scale "
+        "up — (a) <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\"> "
+        "in <head>; (b) base CSS targets phones; enhance with min-width media queries at "
+        "768px and 1024px; (c) navigation (top bar links / sidebar) MUST collapse to a "
+        "burger menu below 768px; (d) never set fixed pixel widths over 320px on "
+        "containers — use max-width + fluid padding; images: max-width:100%; "
+        "height:auto; box-sizing:border-box everywhere; (e) all buttons and links need "
+        ">=44px tap targets; (f) no horizontal overflow at 390px — nothing may stick out "
+        "sideways (the whole page must fit the phone screen). "
         "BLANK-PAGE RULES (critical): (1) All main content must be fully visible WITHOUT "
         "JavaScript — never start sections at opacity:0 or off-screen transforms waiting "
         "for a script; JS may only enhance already-visible content. (2) Set an explicit "
@@ -89,9 +98,13 @@ def _auto_fix(html: str) -> str:
     return html
 
 
-def _lint_html(html: str) -> list[str]:
+def _lint_html(html: str, responsive: bool = True) -> list[str]:
     """Deterministic QA of a built page — no model cost. Returns the exact
-    violations to hand the repair pass; [] means ship it."""
+    violations to hand the repair pass; [] means ship it.
+
+    responsive=False skips the @media check only (immersive one-screen
+    templates can legitimately have no breakpoints); viewport-meta and
+    body min-width bugs are unambiguous and always checked."""
     text = html or ""
     low = text.lower()
     if "<html" not in low:
@@ -136,6 +149,15 @@ def _lint_html(html: str) -> list[str]:
                 and not re.search(r"addEventListener\(\s*['\"]submit", text, re.I):
             problems.append("form has no submit handling")
             break
+    # Mobile-first sanity — regex-only, zero model cost. Clean pages pay
+    # nothing; violations feed the existing repair loop.
+    if not re.search(r'name=["\']viewport["\']', low):
+        problems.append('missing <meta name="viewport"> tag (mobile layout broken)')
+    if responsive and "@media" not in low:
+        problems.append("no responsive breakpoints (@media) — page will not adapt to phones")
+    mw = re.search(r"\bbody\b[^{}]{0,80}\{[^}]*?min-width:\s*(\d{3,4})px", text, re.I)
+    if mw and int(mw.group(1)) >= 480:
+        problems.append(f"body min-width {mw.group(1)}px forces horizontal scroll on phones")
     return problems
 
 
@@ -242,8 +264,10 @@ Output ONLY minified JSON, no fences:
 "reference":"meridian|orbit|jack|vesper|evolve|planet|wildlife|asme|none",
 "spec":"<detailed build prompt in English built from the user's keypoints:
 purpose, audience, exact sections with content themes, style/color mood,
-must-have features, responsive notes — written as instructions to a
-developer>"}
+must-have features — written as instructions to a developer. The spec MUST
+end with a RESPONSIVE section stating: which nav pattern collapses on
+mobile and how, grid column counts per breakpoint (390px / 768px / 1280px),
+touch-target and spacing notes>"}
 or
 {"want":false,"reply":"<your friendly message>"}"""
 
@@ -465,7 +489,9 @@ _DIFF_SYS = (
     ">>>>>>> REPLACE\n"
     "Rules: SEARCH must match the file exactly or the edit is discarded; keep "
     "each block minimal but include enough surrounding lines to make it unique "
-    "in the file; no markdown fences, no explanations. "
+    "in the file; no markdown fences, no explanations; keep the layout "
+    "mobile-first responsive — don't drop viewport meta, media queries or the "
+    "burger nav; any new layout must stay fluid at 390px. "
     "If no change is needed, output NOTHING."
 )
 
@@ -633,7 +659,9 @@ _TPL_EDIT_SYS = (
     "simplify, rewrite from scratch, or invent a different layout. "
     "Rules: output the COMPLETE HTML file, no markdown fences, no explanations; "
     "keep the <base> tag exactly as provided; never leave placeholders/TODOs; "
-    "keep it working and responsive; content must stay visible without JavaScript."
+    "keep it working; keep the existing mobile-first responsive behavior intact "
+    "(viewport meta, media queries, burger nav); content must stay visible "
+    "without JavaScript."
 )
 
 
@@ -686,7 +714,7 @@ async def build_website(req: BuildRequest, request: Request, db: Session = Depen
             # QA gate for the template path: fix exact violations when cheap;
             # never accept a fix that leaves more problems than it started with.
             html = _auto_fix(html)
-            _tpl_v = _lint_html(html)
+            _tpl_v = _lint_html(html, responsive=False)
             if _tpl_v:
                 await emit("phase", "lint")
                 try:
@@ -699,12 +727,13 @@ async def build_website(req: BuildRequest, request: Request, db: Session = Depen
                                                  "cannot fix them all, return it unchanged."},
                     ], model, 6000, own_creds=own_creds)))
                     if ("</html>" in _fix.lower() and "<html" in _fix.lower()
-                            and len(_lint_html(_fix)) < len(_tpl_v)):
+                            and len(_lint_html(_fix, responsive=False)) < len(_tpl_v)):
                         html = _fix
                 except Exception:
                     pass
-                if _lint_html(html):
-                    _log.warning("template lint residual: %s", _lint_html(html)[:5])
+                if _lint_html(html, responsive=False):
+                    _log.warning("template lint residual: %s",
+                                 _lint_html(html, responsive=False)[:5])
             name = re.sub(r"[^a-z0-9]+", "-", (custom or tname).lower()).strip("-")[:40] or "site"
             job_id = uuid.uuid4().hex[:12]
             _JOBS[job_id] = {"name": name, "html": html, "ts": time.time()}
@@ -945,8 +974,10 @@ _EDIT_SYS = (
     "(inline CSS/JS). Apply ONLY the requested change, keeping everything else — "
     "structure, styles, scripts, content not mentioned — exactly as it was. "
     "Rules: output the COMPLETE edited HTML file, no markdown fences, no "
-    "explanations; never leave placeholders/TODOs; keep it working and "
-    "responsive; content must stay visible without JavaScript."
+    "explanations; never leave placeholders/TODOs; keep it working; "
+    "keep the existing mobile-first responsive behavior intact (viewport meta, "
+    "media queries, burger nav) — any NEW layout must stay fluid at 390px; "
+    "content must stay visible without JavaScript."
 )
 
 
