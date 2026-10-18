@@ -1321,8 +1321,8 @@ function BuildPanel({ seed, onConsumed, conversationId, onBuilt, onNewBuild }: {
     return (
       <ThreadShell msgs={log.length ? msgs : []} busy={busy}
         status={busy ? `${phase ?? 'starting…'}${elapsed > 0 ? ` ${elapsed}s` : ''}` : 'Working…'}
-        empty={<div className="welcome">
-          <Orb />
+        empty={<div className="buildempty">
+          <div className="be-ic" aria-hidden="true"><Icon name="code" size={22} /></div>
           <h1>Describe your business. Get a live site.</h1>
           <p>AZX codes it, you preview it, then publish with one click.</p>
         </div>}

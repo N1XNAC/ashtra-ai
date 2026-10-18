@@ -259,6 +259,17 @@ button, input, textarea { font-family: inherit; }
 .welcome p { color: var(--text-secondary, var(--azx-text-secondary)); font-size: 15px; margin: 10px 0 0; }
 .welcome .wspace { height: clamp(26px, 5vh, 58px); }
 
+/* Build & Run empty: utilitarian workspace — deliberately NOT the chat welcome */
+.buildempty { text-align: center; padding: clamp(48px, 12vh, 96px) 20px 0; }
+.be-ic {
+  width: 52px; height: 52px; margin: 0 auto 18px; border-radius: 50%;
+  background: var(--azx-ink); color: var(--azx-ivory);
+  display: flex; align-items: center; justify-content: center;
+  box-shadow: var(--azx-shadow-soft);
+}
+.buildempty h1 { font-size: 22px; font-weight: 650; letter-spacing: -.01em; margin: 0 0 8px; color: var(--azx-text); }
+.buildempty p { color: var(--azx-text-secondary); font-size: 14.5px; margin: 0; max-width: 420px; margin-inline: auto; }
+
 .suggest { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; max-width: 470px; margin: 0 auto; }
 .sug {
   min-height: 70px; border-radius: var(--r-pill);
