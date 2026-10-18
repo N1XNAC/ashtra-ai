@@ -103,10 +103,10 @@ def _lines(text: str, limit: int = 3) -> list[str]:
     return out
 
 
-async def rewrite_queries(question: str) -> list[str]:
+async def rewrite_queries(question: str, own_creds: list[tuple[str, str, str]] | None = None) -> list[str]:
     try:
         out = await ai_core.generate_reply(
-            f"{REWRITE_SYS}\n\nQuestion: {question}")
+            f"{REWRITE_SYS}\n\nQuestion: {question}", own_creds=own_creds)
         qs = _lines(out)
         if qs:
             return qs
@@ -196,9 +196,15 @@ async def run_answer(question: str, focus: str, db, user_id: str):
         return
     if focus not in ("web", "academic", "all"):
         focus = "all"
+    own_creds = None
+    try:
+        from . import byok as byok_svc
+        own_creds = byok_svc.creds_for(db, user_id) or None
+    except Exception:
+        own_creds = None
 
     yield ("phase", "understanding")
-    queries = await rewrite_queries(question)
+    queries = await rewrite_queries(question, own_creds=own_creds)
     _log.info("answer rewrite → %d queries", len(queries))
 
     yield ("phase", "searching")
@@ -256,7 +262,8 @@ async def run_answer(question: str, focus: str, db, user_id: str):
         # low so the token budget goes to the answer (high reasoning on a big
         # prompt burns the whole budget silently → empty stream).
         async for chunk in ai_core.generate_reply_stream(prompt, deep_thinking=True,
-                                                         reasoning="low"):
+                                                         reasoning="low",
+                                                         own_creds=own_creds):
             parts.append(chunk)
             yield ("delta", chunk)
     except Exception as e:
@@ -273,7 +280,8 @@ async def run_answer(question: str, focus: str, db, user_id: str):
     try:
         fq = await ai_core.generate_reply(
             "Suggest 3 short follow-up questions about this topic, one per line, "
-            f"no numbering.\n\nTopic: {question}\nAnswer: {answer[:600]}")
+            f"no numbering.\n\nTopic: {question}\nAnswer: {answer[:600]}",
+            own_creds=own_creds)
         followups = _lines(fq)
     except Exception:
         pass

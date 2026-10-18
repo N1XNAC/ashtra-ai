@@ -24,6 +24,7 @@ from .. import models
 from ..config import settings
 from ..database import get_db
 from ..services import memory_engine, prompt_engine, template_bank, web_images
+from ..services import byok as byok_svc
 
 router = APIRouter(prefix="/build", tags=["build"])
 _log = logging.getLogger("ashtra.build")
@@ -259,7 +260,7 @@ def _json_out(text: str) -> dict:
         return {}
 
 
-async def _understand(prompt: str, mem_ctx: str = "") -> dict:
+async def _understand(prompt: str, mem_ctx: str = "", own_creds=None) -> dict:
     """Stage 1 — does the user actually want a site? If so, write the spec."""
     user_msg = prompt
     if mem_ctx:
@@ -270,7 +271,7 @@ async def _understand(prompt: str, mem_ctx: str = "") -> dict:
         out = await _llm_html([
             {"role": "system", "content": _UNDERSTAND_SYS},
             {"role": "user", "content": user_msg},
-        ], "openai/gpt-oss-20b", 1200, "low")
+        ], "openai/gpt-oss-20b", 1200, "low", own_creds=own_creds)
         data = _json_out(out)
         if data:
             break
@@ -307,12 +308,13 @@ _EDIT_FALLBACK_MODELS = [
 
 
 async def _groq_html(messages: list[dict], model: str, max_tokens: int, effort: str,
-                     patient: bool = True) -> str:
+                     patient: bool = True, creds: tuple[str, str] | None = None) -> str:
     payload = {"model": model, "messages": messages,
                "max_tokens": max_tokens, "temperature": 0.5,
                "reasoning_effort": effort}
-    url = f"{settings.groq_base_url.rstrip('/')}/chat/completions"
-    headers = {"Authorization": f"Bearer {settings.groq_api_key}"}
+    base_url, api_key = creds if creds else (settings.groq_base_url, settings.groq_api_key)
+    url = f"{base_url.rstrip('/')}/chat/completions"
+    headers = {"Authorization": f"Bearer {api_key}"}
     async with httpx.AsyncClient(timeout=180) as c:
         for attempt in range(4):
             try:
@@ -337,9 +339,13 @@ async def _groq_html(messages: list[dict], model: str, max_tokens: int, effort: 
 
 
 async def _openrouter_html(messages: list[dict], max_tokens: int,
-                           require_html: bool = False) -> str:
-    base = (settings.vision_base_url or "https://openrouter.ai/api/v1").rstrip("/")
-    key = settings.vision_api_key
+                           require_html: bool = False,
+                           creds: tuple[str, str] | None = None) -> str:
+    if creds:
+        base, key = creds[0].rstrip("/"), creds[1]
+    else:
+        base = (settings.vision_base_url or "https://openrouter.ai/api/v1").rstrip("/")
+        key = settings.vision_api_key
     if not key:
         raise HTTPException(status_code=502,
                             detail="Big-site model not configured (VISION_API_KEY missing).")
@@ -399,13 +405,23 @@ async def _openrouter_html(messages: list[dict], max_tokens: int,
 
 
 async def _llm_html(messages: list[dict], model: str, max_tokens: int, effort: str = "medium",
-                    require_html: bool = False) -> str:
+                    require_html: bool = False,
+                    own_creds: list[tuple[str, str, str]] | None = None) -> str:
     """HTML LLM call with provider fallback.
 
-    Small prompts go to Groq (fast). Full template edits carry 50KB+ of HTML,
+    BYOK: the user's own provider keys go first (their model + quota). Then
+    small prompts go to Groq (fast). Full template edits carry 50KB+ of HTML,
     which Groq rejects with 413 (free org TPM cap) — those go to the
     OpenRouter big-context chain instead of exploding into a 500.
     """
+    # BYOK: user's own keys first — try each with its chosen model, fail-fast
+    # (no patient retry) into the server chain on any error.
+    for base_url, api_key, omodel in (own_creds or []):
+        try:
+            return await _groq_html(messages, omodel, max_tokens, effort,
+                                    patient=False, creds=(base_url, api_key))
+        except (_PayloadTooLarge, HTTPException):
+            continue
     input_chars = sum(len(m.get("content") or "") for m in messages)
     est = input_chars / 3.4 + max_tokens
     # Groq free org ≈8k TPM shared with chat — only route when input+output fits
@@ -493,7 +509,8 @@ def _apply_diff_blocks(html: str, out: str) -> tuple[str | None, str]:
     return html, f"{len(raw_blocks)} blocks"
 
 
-async def _edit_html(html: str, instruction: str, model: str, on_phase=None) -> str:
+async def _edit_html(html: str, instruction: str, model: str, on_phase=None,
+                     own_creds: list[tuple[str, str, str]] | None = None) -> str:
     """Diff-first edit with full-rewrite fallback. Returns complete HTML."""
     if on_phase:
         await on_phase("diff")
@@ -502,7 +519,7 @@ async def _edit_html(html: str, instruction: str, model: str, on_phase=None) -> 
             {"role": "system", "content": _DIFF_SYS},
             {"role": "user", "content": (
                 f"CHANGE REQUEST: {instruction}\n\nCURRENT HTML:\n{html}")},
-        ], model, 2000)
+        ], model, 2000, own_creds=own_creds)
         patched, reason = _apply_diff_blocks(html, dout)
         if patched and "</html>" in patched.lower() and len(patched) > len(html) // 2:
             _log.info("diff edit ok (%s, %d chars)", reason, len(patched))
@@ -516,7 +533,7 @@ async def _edit_html(html: str, instruction: str, model: str, on_phase=None) -> 
         {"role": "system", "content": _EDIT_SYS},
         {"role": "user", "content": (
             f"CHANGE REQUEST: {instruction}\n\nCURRENT HTML:\n{html}")},
-    ], model, 16000, "medium", require_html=True)
+    ], model, 16000, "medium", require_html=True, own_creds=own_creds)
     return _clean(out)
 
 
@@ -613,6 +630,7 @@ async def build_website(req: BuildRequest, request: Request, db: Session = Depen
     prompt = req.prompt.strip()
     if not prompt:
         raise HTTPException(status_code=400, detail="Prompt is empty.")
+    own_creds = byok_svc.creds_for(db, req.user_id) or None
 
     async def _work(emit) -> dict:
         # Web Market template flow: "Use template" seeds the prompt with the
@@ -642,7 +660,8 @@ async def build_website(req: BuildRequest, request: Request, db: Session = Depen
                         html = base + html
             try:
                 cand = await _edit_html(html, custom, model,
-                                        on_phase=lambda label: emit("phase", label))
+                                        on_phase=lambda label: emit("phase", label),
+                                        own_creds=own_creds)
                 # only accept a complete rewrite of the same template; otherwise
                 # fall back to the exact untouched template (still a valid site)
                 if ("</html>" in cand.lower() and "<html" in cand.lower()
@@ -665,7 +684,7 @@ async def build_website(req: BuildRequest, request: Request, db: Session = Depen
                          + "\n- ".join(_tpl_v) + "\nReturn the FULL corrected single HTML "
                                                  "file (no fences, no commentary). If you "
                                                  "cannot fix them all, return it unchanged."},
-                    ], model, 6000)))
+                    ], model, 6000, own_creds=own_creds)))
                     if ("</html>" in _fix.lower() and "<html" in _fix.lower()
                             and len(_lint_html(_fix)) < len(_tpl_v)):
                         html = _fix
@@ -713,7 +732,7 @@ async def build_website(req: BuildRequest, request: Request, db: Session = Depen
             mem_ctx = ""
         await emit("phase", "understand")
         try:
-            understanding = await _understand(prompt, mem_ctx)
+            understanding = await _understand(prompt, mem_ctx, own_creds=own_creds)
         except HTTPException:
             raise
         except Exception as e:
@@ -758,7 +777,8 @@ async def build_website(req: BuildRequest, request: Request, db: Session = Depen
         brief = await prompt_engine.compose(
             prompt, spec=spec, mem_ctx=mem_ctx,
             style_block=style_block or ref_line,
-            llm=lambda msgs: _llm_html(msgs, "openai/gpt-oss-20b", 1000, "low"))
+            llm=lambda msgs: _llm_html(msgs, "openai/gpt-oss-20b", 1000, "low",
+                                       own_creds=own_creds))
         brief_text = prompt_engine.render(brief)
         # Real image URLs so the generated page never ships links that 404 —
         # the brief's imagery query targets this site's actual subject.
@@ -792,7 +812,7 @@ async def build_website(req: BuildRequest, request: Request, db: Session = Depen
         html = ""
         await emit("phase", "generate")
         try:
-            html = _auto_fix(_clean(await _llm_html(messages, model, 6000)))
+            html = _auto_fix(_clean(await _llm_html(messages, model, 6000, own_creds=own_creds)))
         except HTTPException:
             raise
         except Exception as e:
@@ -818,7 +838,7 @@ async def build_website(req: BuildRequest, request: Request, db: Session = Depen
                      + "\n- ".join(best_v) + "\nReturn the FULL corrected single HTML "
                                              "file — no fences, no commentary. Fix every "
                                              "violation; keep everything else identical."},
-                ], model, 6000)))
+                ], model, 6000, own_creds=own_creds)))
             except Exception:
                 continue
             if "<html" not in cand.lower() or "</html>" not in cand.lower():
@@ -903,6 +923,7 @@ def _load_job_html(job_id: str, db: Session) -> dict:
 class BuildEdit(BaseModel):
     job_id: str
     instruction: str
+    user_id: str = "master-001"
 
 
 _EDIT_SYS = (
@@ -926,11 +947,13 @@ async def build_edit(req: BuildEdit, db: Session = Depends(get_db)):
     instruction = req.instruction.strip()
     if not instruction:
         raise HTTPException(status_code=400, detail="No instruction given.")
+    own_creds = byok_svc.creds_for(db, req.user_id) or None
 
     async def _work(emit) -> dict:
         try:
             html = await _edit_html(job["html"], instruction, "openai/gpt-oss-120b",
-                                    on_phase=lambda label: emit("phase", label))
+                                    on_phase=lambda label: emit("phase", label),
+                                    own_creds=own_creds)
         except HTTPException:
             raise
         except Exception as e:

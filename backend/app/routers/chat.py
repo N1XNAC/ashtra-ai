@@ -6,6 +6,7 @@ from ..config import settings
 from ..security import check_rate, client_ip
 from ..services import ai_core, memory_engine, behavior_analyzer, personality_adapter, planner, knowledge_graph, web_images, study
 from ..services import agent as agent_exec
+from ..services import byok as byok_svc
 from ..services.tools import due_reminders
 import asyncio
 import json
@@ -107,6 +108,7 @@ async def chat(req: schemas.ChatRequest, request: Request, db: Session = Depends
         db.add(profile)
         db.commit()
     t.mark("db_user")
+    own_creds = byok_svc.creds_for(db, user.id) or None
 
     conv = None
     new_conv = False
@@ -309,7 +311,7 @@ async def chat(req: schemas.ChatRequest, request: Request, db: Session = Depends
                     retry = await ai_core.generate_reply(
                         f"{study.SVG_RETRY_SYS}\n\nTopic: {slash_topic or slash_arg}",
                         ctx, history, memory_context, adaptation_text,
-                        reasoning="low", max_tokens=800)
+                        reasoning="low", max_tokens=800, own_creds=own_creds)
                     _, cards = study.extract_cards(retry)
                     if cards:
                         log.info("[ASHRA API] study cards recovered on retry (%d items)",
@@ -447,7 +449,7 @@ async def chat(req: schemas.ChatRequest, request: Request, db: Session = Depends
                         gen_text, ctx, history, memory_context, adaptation_text,
                         deep_thinking=bool(getattr(req, "deep_thinking", False)),
                         max_tokens=cmd_budget,
-                        reasoning=cmd_reason):
+                        reasoning=cmd_reason, own_creds=own_creds):
                     if first:
                         t.mark("llm_ttft")  # time to first visible token
                         first = False
@@ -659,7 +661,7 @@ async def chat(req: schemas.ChatRequest, request: Request, db: Session = Depends
                         _retry = await ai_core.generate_reply(
                             f"{study.SVG_RETRY_SYS}\n\nTopic: {slash_topic or slash_arg}",
                             ctx, history, memory_context, adaptation_text,
-                            reasoning="low", max_tokens=800)
+                            reasoning="low", max_tokens=800, own_creds=own_creds)
                         _, _cards2 = study.extract_cards(_retry)
                         if _cards2:
                             yield "data: " + json.dumps(
@@ -704,7 +706,7 @@ async def chat(req: schemas.ChatRequest, request: Request, db: Session = Depends
     reply = await ai_core.generate_reply(gen_text, ctx, history, memory_context, adaptation_text,
                                            deep_thinking=bool(getattr(req, "deep_thinking", False)),
                                            max_tokens=cmd_budget,
-                                           reasoning=cmd_reason)
+                                           reasoning=cmd_reason, own_creds=own_creds)
     t.mark("llm")
     log.info("[ASHRA API] generation completed user=%s reply_len=%d", user.id, len(reply or ""))
     return await _finalize(reply)

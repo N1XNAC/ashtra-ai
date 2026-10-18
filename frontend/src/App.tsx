@@ -163,6 +163,7 @@ const PATHS: Record<string, ReactNode> = {
   calendar: (<><rect x="3" y="4" width="18" height="18" rx="2" /><path d="M16 2v4M8 2v4M3 10h18" /></>),
   plus: (<><path d="M12 5v14M5 12h14" /></>),
   mic: (<><rect x="9" y="2.5" width="6" height="11" rx="3" /><path d="M5 11a7 7 0 0 0 14 0" /><path d="M12 18v3.5" /></>),
+  wave: (<><path d="M4 10v4M8 7v10M12 4v16M16 7v10M20 10v4" /></>),
   globe: (<><circle cx="12" cy="12" r="9" /><path d="M3 12h18" /><path d="M12 3a14.5 14.5 0 0 1 0 18 14.5 14.5 0 0 1 0-18" /></>),
   image: (<><rect x="3" y="3" width="18" height="18" rx="2" /><circle cx="9" cy="9" r="2" /><path d="m21 15-5-5L5 21" /></>),
   search: (<><circle cx="11" cy="11" r="7" /><path d="m20 20-3.8-3.8" /></>),
@@ -304,44 +305,151 @@ function Orb() {
 
 /* real dictation via the browser Web Speech API (no fake loading states);
    the button only renders where the API actually exists */
+type DictationResult = { transcript: string; isFinal: boolean }
+type DictationEvent = { resultIndex: number; results: ArrayLike<DictationResult & ArrayLike<{ transcript: string }>> }
 type DictationCtor = new () => {
-  lang: string; interimResults: boolean; maxAlternatives: number
-  onresult: ((e: { results: { [i: number]: { [j: number]: { transcript: string } } } }) => void) | null
-  onerror: (() => void) | null
+  lang: string; interimResults: boolean; maxAlternatives: number; continuous: boolean
+  onresult: ((e: DictationEvent) => void) | null
+  onerror: ((e: { error?: string }) => void) | null
   onend: (() => void) | null
   start: () => void; stop: () => void
 }
+/* Voice dictation state machine:
+   idle → requesting → listening → transcribing → idle, plus error.
+   Real microphone amplitude drives the listening-strip bars (AnalyserNode).
+   Final transcripts are appended to the draft — never auto-sent. */
+type VoicePhase = 'idle' | 'requesting' | 'listening' | 'transcribing' | 'error'
+const VOICE_BARS = 22
 function useDictation(onText: (t: string) => void) {
-  const [listening, setListening] = useState(false)
+  const [phase, setPhase] = useState<VoicePhase>('idle')
+  const [error, setError] = useState('')
+  const [interim, setInterim] = useState('')
+  const [levels, setLevels] = useState<number[]>(() => new Array(VOICE_BARS).fill(0.06))
   const recRef = useRef<InstanceType<DictationCtor> | null>(null)
+  const streamRef = useRef<MediaStream | null>(null)
+  const ctxRef = useRef<AudioContext | null>(null)
+  const rafRef = useRef<number | null>(null)
+  const phaseRef = useRef<VoicePhase>('idle')
   const w = typeof window !== 'undefined'
     ? window as unknown as { SpeechRecognition?: DictationCtor; webkitSpeechRecognition?: DictationCtor }
     : undefined
   const Ctor = w?.SpeechRecognition ?? w?.webkitSpeechRecognition
-  useEffect(() => () => { try { recRef.current?.stop() } catch { /* ignore */ } }, [])
+  const setPh = (p: VoicePhase) => { phaseRef.current = p; setPhase(p) }
+
+  const cleanup = () => {
+    if (rafRef.current !== null) { cancelAnimationFrame(rafRef.current); rafRef.current = null }
+    try { ctxRef.current?.close() } catch { /* already closed */ }
+    ctxRef.current = null
+    streamRef.current?.getTracks().forEach(t => { try { t.stop() } catch { /* gone */ } })
+    streamRef.current = null
+  }
+  useEffect(() => () => { try { recRef.current?.stop() } catch { /* ignore */ } cleanup() }, [])
+
+  const startMeter = (stream: MediaStream) => {
+    try {
+      const Ctx = (window as unknown as { AudioContext?: typeof AudioContext; webkitAudioContext?: typeof AudioContext }).AudioContext
+        ?? (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext
+      if (!Ctx) return
+      const ctx = new Ctx()
+      ctxRef.current = ctx
+      const src = ctx.createMediaStreamSource(stream)
+      const analyser = ctx.createAnalyser()
+      analyser.fftSize = 128
+      src.connect(analyser)
+      const data = new Uint8Array(analyser.frequencyBinCount)
+      const buf = new Array(VOICE_BARS).fill(0.06)
+      let tick = 0
+      const loop = () => {
+        analyser.getByteTimeDomainData(data)
+        let sum = 0
+        for (let i = 0; i < data.length; i++) { const v = (data[i] - 128) / 128; sum += v * v }
+        const rms = Math.sqrt(sum / data.length)
+        const amp = Math.min(1, rms * 3.2)
+        if (tick++ % 2 === 0) {
+          buf.push(Math.max(0.06, amp)); buf.shift()
+          setLevels([...buf])
+        }
+        rafRef.current = requestAnimationFrame(loop)
+      }
+      rafRef.current = requestAnimationFrame(loop)
+    } catch { /* meter optional — dictation still works without it */ }
+  }
+
+  const stopAll = () => {
+    if (phaseRef.current === 'listening') setPh('transcribing')
+    try { recRef.current?.stop() } catch { /* ignore */ }
+    cleanup()
+    setInterim('')
+    setLevels(new Array(VOICE_BARS).fill(0.06))
+  }
+
   const toggle = () => {
     if (!Ctor) return
-    if (listening) { try { recRef.current?.stop() } catch { /* ignore */ } setListening(false); return }
-    const rec = new Ctor()
-    rec.lang = navigator.language || 'en-US'
-    rec.interimResults = false
-    rec.maxAlternatives = 1
-    rec.onresult = e => { const t = e?.results?.[0]?.[0]?.transcript; if (t) onText(t) }
-    rec.onerror = () => setListening(false)
-    rec.onend = () => setListening(false)
-    recRef.current = rec
-    setListening(true)
-    try { rec.start() } catch { setListening(false) }
+    if (phaseRef.current !== 'idle') { stopAll(); return }
+    if (!navigator.mediaDevices?.getUserMedia) {
+      setPh('error'); setError('Microphone access is not available in this browser.')
+      return
+    }
+    setPh('requesting'); setError('')
+    navigator.mediaDevices.getUserMedia({ audio: true }).then(stream => {
+      if (phaseRef.current !== 'requesting') { stream.getTracks().forEach(t => t.stop()); return }
+      streamRef.current = stream
+      startMeter(stream)
+      const rec = new Ctor()
+      rec.lang = navigator.language || 'en-US'
+      rec.interimResults = true
+      rec.continuous = false
+      rec.maxAlternatives = 1
+      rec.onresult = (e: DictationEvent) => {
+        let finals = '', inter = ''
+        for (let i = e.resultIndex; i < e.results.length; i++) {
+          const r = e.results[i]
+          const t = r[0]?.transcript ?? ''
+          if (r.isFinal) finals += t
+          else inter += t
+        }
+        if (finals.trim()) { onText(finals.trim()); setInterim('') }
+        else setInterim(inter)
+      }
+      rec.onerror = (ev: { error?: string }) => {
+        const code = ev.error ?? ''
+        cleanup()
+        setInterim('')
+        if (code === 'not-allowed' || code === 'service-not-allowed') {
+          setPh('error'); setError('Microphone permission denied — allow it in your browser settings.')
+        } else if (code === 'no-speech') {
+          setPh('error'); setError('No speech heard — try again.')
+        } else {
+          setPh('error'); setError(code ? `Dictation error: ${code}` : 'Dictation failed.')
+        }
+      }
+      rec.onend = () => {
+        cleanup()
+        setInterim('')
+        setLevels(new Array(VOICE_BARS).fill(0.06))
+        setPh('idle')
+      }
+      recRef.current = rec
+      setPh('listening')
+      try { rec.start() } catch { cleanup(); setPh('error'); setError('Could not start dictation.') }
+    }).catch(() => {
+      setPh('error')
+      setError('Microphone permission denied — allow it in your browser settings.')
+    })
   }
-  return { supported: !!Ctor, listening, toggle }
+  return {
+    supported: !!Ctor, phase, listening: phase === 'listening', error, interim, levels,
+    active: phase !== 'idle', toggle, dismissError: () => { if (phaseRef.current === 'error') { setPh('idle'); setError('') } },
+  }
 }
 
 function ComposerShell({ lead, field, canSend, onSend, sendLabel, head, streaming, onStop, onVoice }: {
   lead?: ReactNode; field: ReactNode; canSend: boolean
-  onSend: () => void; sendLabel: string; boxExtra?: string; head?: ReactNode
+  onSend: () => void; sendLabel: string; head?: ReactNode
   streaming?: boolean; onStop?: () => void; onVoice?: (transcript: string) => void
 }) {
   const dictation = useDictation(t => onVoice?.(t))
+  const vc = dictation
   return (
     <div className="composer">
       {head}
@@ -351,13 +459,18 @@ function ComposerShell({ lead, field, canSend, onSend, sendLabel, head, streamin
             <div className="uv-btns-add uv-lead">{lead}</div>
             <div className="uv-chat-bot">{field}</div>
             <div className="uv-options">
-              {onVoice && dictation.supported && (
-                <button type="button" className={`uv-mic${dictation.listening ? ' on' : ''}`}
-                  aria-pressed={dictation.listening}
-                  aria-label={dictation.listening ? 'Stop dictation' : 'Dictate with your voice'}
-                  onClick={dictation.toggle}>
-                  <i><Icon name={dictation.listening ? 'stop' : 'mic'} size={17} /></i>
-                </button>
+              {onVoice && vc.supported && (
+                <>
+                  <span className={`vwave${vc.listening ? ' on' : ''}`} aria-hidden="true">
+                    <Icon name="wave" size={15} />
+                  </span>
+                  <button type="button" className={`uv-mic${vc.listening ? ' on' : ''}`}
+                    aria-pressed={vc.listening}
+                    aria-label={vc.listening ? 'Stop dictation' : 'Dictate with your voice'}
+                    onClick={vc.toggle}>
+                    <i><Icon name={vc.listening ? 'stop' : 'mic'} size={17} /></i>
+                  </button>
+                </>
               )}
               {streaming ? (
                 <button className="uv-submit stop" onClick={onStop} aria-label="Stop generating">
@@ -371,6 +484,32 @@ function ComposerShell({ lead, field, canSend, onSend, sendLabel, head, streamin
             </div>
           </div>
         </div>
+        {onVoice && vc.supported && vc.phase !== 'idle' && (
+          <div className={`vstrip${vc.phase === 'error' ? ' err' : ''}`} role="status" aria-live="polite">
+            {vc.phase === 'listening' && (
+              <span className="vbars" aria-hidden="true">
+                {vc.levels.map((a, i) => (
+                  <i key={i} style={{ height: `${Math.round(4 + a * 24)}px` }} />
+                ))}
+              </span>
+            )}
+            <span className="vlabel">
+              {vc.phase === 'requesting' && 'Starting microphone…'}
+              {vc.phase === 'listening' && 'Listening…'}
+              {vc.phase === 'transcribing' && 'Transcribing…'}
+              {vc.phase === 'error' && (vc.error || 'Dictation failed.')}
+            </span>
+            {vc.phase === 'listening' && vc.interim && (
+              <span className="vinterim">{vc.interim}</span>
+            )}
+            {vc.phase !== 'transcribing' && (
+              <button type="button" className="vstop" aria-label="Stop dictation"
+                onClick={vc.phase === 'error' ? vc.dismissError : vc.toggle}>
+                <Icon name="stop" size={13} />
+              </button>
+            )}
+          </div>
+        )}
       </div>
     </div>
   )
@@ -615,7 +754,6 @@ function Chat({ convId, sessKey, sess, patchSess, onNewConv, refreshSidebar, onD
   name?: string; onAnswer?: () => void
 }) {
   const { msgs: cached, input, busy, busyLabel, err, attach } = sess
-  const [morph, setMorph] = useState(false) /* gooey send-button stretch, one shot per send */
   const [streaming, setStreaming] = useState(false) /* send button ⇄ stop while the reply streams */
   const abortRef = useRef<AbortController | null>(null)
   const [deep, setDeep] = useState(() => {
@@ -693,7 +831,6 @@ function Chat({ convId, sessKey, sess, patchSess, onNewConv, refreshSidebar, onD
     if (!convId) onDraft(content)
     if (fileRef.current) fileRef.current.value = ''
     requestAnimationFrame(autosize)
-    setMorph(true); setTimeout(() => setMorph(false), 400) /* fire the morph, then settle */
     /* vision link: image → text context for the text brain */
     let image_context: string | undefined
     let sawImage = false
@@ -878,7 +1015,6 @@ function Chat({ convId, sessKey, sess, patchSess, onNewConv, refreshSidebar, onD
             </div>
           )}
         </>}
-        boxExtra={morph ? 'gulp' : ''}
         lead={<>
           <input ref={fileRef} type="file" accept="image/png,image/jpeg,image/webp,image/gif"
             hidden onChange={pickImage} />
@@ -1464,15 +1600,17 @@ function MemoryPanel() {
         <input value={q} onChange={e => search(e.target.value)} placeholder="Search memories…" />
       </div>
       {rows.length === 0 && <div className="card">No memories yet. Chat, and AZX will remember.</div>}
-      {rows.map((m, i) => (
-        <div key={hits ? i : (m as Mem).id} className="card">
-          <div className="row">
-            <div className="grow"><span className="kind">{m.kind}</span>{m.content}</div>
-            {!hits && <button className="mini danger" onClick={() => setConfirmDel((m as Mem).id)}>Delete</button>}
-          </div>
-          {'score' in m && <div className="lab">score {(m as { score: number }).score.toFixed(2)}</div>}
+      {rows.length > 0 && (
+        <div className="memrows">
+          {rows.map((m, i) => (
+            <div key={hits ? i : (m as Mem).id} className="memrow">
+              <div className="grow"><span className="kind">{m.kind}</span>{m.content}</div>
+              {!hits && <button className="mini danger" onClick={() => setConfirmDel((m as Mem).id)}>Delete</button>}
+              {'score' in m && <span className="lab">score {(m as { score: number }).score.toFixed(2)}</span>}
+            </div>
+          ))}
         </div>
-      ))}
+      )}
       <div className="toolbar">
         <button className="mini" onClick={async () => { await post(`/memories/${USER}/reindex`, {}); load() }}>Reindex vectors</button>
         <button className="mini" onClick={async () => {
@@ -1642,6 +1780,95 @@ function YouPanel({ name, onName }: { name: string; onName: (v: string) => void 
 }
 
 /* ---------- settings ---------- */
+/* ---------- BYOK (Bring Your Own Key) ---------- */
+type ByokProvider = {
+  id: string; label: string; docs: string; models: string[]; default_model: string
+  configured: boolean; masked_key: string; model: string; last_error: string | null
+}
+function ByokSection() {
+  const [provs, setProvs] = useState<ByokProvider[]>([])
+  const [drafts, setDrafts] = useState<Record<string, string>>({})
+  const [models, setModels] = useState<Record<string, string>>({})
+  const [busy, setBusy] = useState<string | null>(null)
+  const [msg, setMsg] = useState<Record<string, { ok: boolean; text: string }>>({})
+  useEffect(() => {
+    api(`/byok/${USER}/providers`).then((d: { providers: ByokProvider[] }) => {
+      setProvs(d.providers ?? [])
+      setModels(Object.fromEntries((d.providers ?? []).map(p => [p.id, p.model || p.default_model])))
+    }).catch(() => { /* offline */ })
+  }, [])
+  async function save(p: ByokProvider) {
+    const key = (drafts[p.id] ?? '').trim()
+    if (!key) { setMsg(m => ({ ...m, [p.id]: { ok: false, text: 'Enter an API key first.' } })); return }
+    setBusy(p.id); setMsg(m => ({ ...m, [p.id]: { ok: true, text: 'Testing & saving…' } }))
+    try {
+      const r = await api('/byok/keys', { method: 'PUT', body: JSON.stringify({ user_id: USER, provider: p.id, api_key: key, model: models[p.id] ?? '' }) }) as { ok: boolean; message: string; masked_key: string; model: string }
+      setMsg(m => ({ ...m, [p.id]: { ok: true, text: r.message } }))
+      setDrafts(d => ({ ...d, [p.id]: '' }))
+      setProvs(ps => ps.map(x => x.id === p.id ? { ...x, configured: true, masked_key: r.masked_key, model: r.model, last_error: null } : x))
+    } catch (e) {
+      setMsg(m => ({ ...m, [p.id]: { ok: false, text: e instanceof Error ? e.message : 'Save failed.' } }))
+    }
+    setBusy(null)
+  }
+  async function remove(p: ByokProvider) {
+    setBusy(p.id)
+    try {
+      await api(`/byok/keys/${p.id}?user_id=${USER}`, { method: 'DELETE' })
+      setProvs(ps => ps.map(x => x.id === p.id ? { ...x, configured: false, masked_key: '', last_error: null } : x))
+      setMsg(m => ({ ...m, [p.id]: { ok: true, text: 'Key removed.' } }))
+    } catch (e) {
+      setMsg(m => ({ ...m, [p.id]: { ok: false, text: e instanceof Error ? e.message : 'Remove failed.' } }))
+    }
+    setBusy(null)
+  }
+  return (
+    <div className="byok">
+      {provs.map(p => {
+        const m = msg[p.id]
+        return (
+          <div className="card byok-row" key={p.id}>
+            <div className="byok-head">
+              <strong>{p.label}</strong>
+              {p.configured && <span className="byok-badge">● Active · {p.masked_key}</span>}
+            </div>
+            <div className="byok-fields">
+              <input
+                type="password" autoComplete="off" spellCheck={false}
+                placeholder={p.configured ? 'Replace key…' : `Paste ${p.label} API key`}
+                value={drafts[p.id] ?? ''}
+                onChange={e => setDrafts(d => ({ ...d, [p.id]: e.target.value }))}
+                disabled={busy === p.id}
+              />
+              <select
+                value={models[p.id] ?? p.default_model}
+                onChange={e => setModels(mm => ({ ...mm, [p.id]: e.target.value }))}
+                disabled={busy === p.id}
+              >
+                {p.models.map(mid => <option key={mid} value={mid}>{mid}</option>)}
+              </select>
+            </div>
+            <div className="byok-actions">
+              <button className="mini" disabled={busy === p.id} onClick={() => save(p)}>
+                {busy === p.id ? 'Working…' : 'Save & Test'}
+              </button>
+              {p.configured && (
+                <button className="mini danger-solid" disabled={busy === p.id} onClick={() => remove(p)}>Remove</button>
+              )}
+              <a className="byok-docs" href={p.docs} target="_blank" rel="noreferrer">Get a key ↗</a>
+            </div>
+            {m && <div className={m.ok ? 'byok-msg ok' : 'byok-msg err'}>{m.text}</div>}
+          </div>
+        )
+      })}
+      <div className="byok-note">
+        Your keys are used first for your own chats, builds, and answers. The provider may bill you separately.
+        Keys are stored on this app’s server (not encrypted at rest on the free SQLite tier) — remove them anytime.
+      </div>
+    </div>
+  )
+}
+
 function SettingsPanel({ fs, setFs, onExport, canExport }: {
   fs: string; setFs: (v: string) => void; onExport: () => void; canExport: boolean
 }) {
@@ -1653,6 +1880,8 @@ function SettingsPanel({ fs, setFs, onExport, canExport }: {
       <Seg options={['Normal', 'Large']}
         value={fs === 'large' ? 'Large' : 'Normal'}
         onPick={v => setFs(v === 'Large' ? 'large' : 'normal')} />
+      <div className="lab">AI Providers</div>
+      <ByokSection />
       <div className="lab">Chat history</div>
       <div className="card setrow">
         <span>Export open chat as markdown</span>
@@ -1752,7 +1981,7 @@ function AnswerPanel() {
     } catch { /* offline */ }
   }
   return (
-    <div className="panel"><div className="panel-inner">
+    <div className="panel"><div className="panel-inner wide">
       <h2>Answers</h2>
       <div className="seg">
         {(['all', 'web', 'academic'] as const).map(f => (
@@ -1836,6 +2065,22 @@ export default function App() {
   }, [view, convId])
   const [convs, setConvs] = useState<Conv[]>([])
   const [sideOpen, setSideOpen] = useState(() => window.innerWidth > 760)
+  /* drawer a11y: Escape closes it; background scroll locked while open on mobile */
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setSideOpen(false)
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [])
+  useEffect(() => {
+    const m = window.matchMedia('(max-width: 760px)')
+    if (m.matches && sideOpen) {
+      const prev = document.body.style.overflow
+      document.body.style.overflow = 'hidden'
+      return () => { document.body.style.overflow = prev }
+    }
+  }, [sideOpen])
   const [confirmDel, setConfirmDel] = useState<string | null>(null)
   const [userName, setUserName] = useState(() => {
     try { return localStorage.getItem('ashtra-name') || '' } catch { return '' }
@@ -2010,7 +2255,10 @@ export default function App() {
         name={userName} onBuild={startFreshBuild} onOpenBuild={openBuildConv} />
       <div className="main">
         <div className="topbar">
-          <button className="burger" style={{ visibility: sideOpen ? 'hidden' : 'visible', opacity: sideOpen ? 0 : 1 }} onClick={() => setSideOpen(o => !o)} aria-label="Open menu"><Icon name="menu" size={22} /></button>
+          <button className="burger" style={{ visibility: sideOpen ? 'hidden' : 'visible', opacity: sideOpen ? 0 : 1 }}
+            onClick={() => setSideOpen(o => !o)} aria-label="Open menu" aria-expanded={sideOpen}>
+            <Icon name="menu" size={22} />
+          </button>
           <div className="mode-wrap" onClick={e => e.stopPropagation()}>
             <button className="mode-sel" aria-haspopup="menu" aria-expanded={modeOpen}
               onClick={() => setModeOpen(o => !o)}>
@@ -2029,9 +2277,9 @@ export default function App() {
               </div>
             )}
           </div>
-          <button className="iconbtn plain top-new" aria-label="New chat"
-            onClick={() => { if (sessions['new']?.busy) return; setConvId(null); setView('chat') }}>
-            <Icon name="plus" size={19} />
+          <button className="top-avatar" aria-label="Your profile"
+            onClick={() => setView('you')}>
+            {userName ? userName.slice(0, 1).toUpperCase() : 'P'}
           </button>
         </div>
         {view === 'chat' && <Chat key={sessKey} convId={convId} sessKey={sessKey} sess={sess}

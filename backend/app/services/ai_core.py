@@ -242,7 +242,15 @@ async def describe_image(image_b64: str, mime: str, question: str = "") -> str |
     return await _once(models[0])
 
 
-async def generate_reply(user_message: str, profile_context: str = "", history: list[dict] = [], memory_context: str = "", adaptation: str = "", deep_thinking: bool = False, reasoning: str | None = None, max_tokens: int | None = None) -> str:
+async def generate_reply(user_message: str, profile_context: str = "", history: list[dict] = [], memory_context: str = "", adaptation: str = "", deep_thinking: bool = False, reasoning: str | None = None, max_tokens: int | None = None, own_creds: list[tuple[str, str, str]] | None = None) -> str:
+    # BYOK: the user's own provider keys go first (their model + quota).
+    for base_url, api_key, model in (own_creds or []):
+        reply = await _openai_compat_reply(
+            base_url, api_key, model, user_message, profile_context, history,
+            memory_context, adaptation, deep_thinking, reasoning=reasoning,
+            max_tokens=max_tokens)
+        if reply:
+            return reply
     # Link 1: explicit OpenAI-compatible endpoint (.env)
     if settings.openai_base_url and settings.openai_api_key:
         reply = await _openai_compat_reply(
@@ -289,13 +297,14 @@ def _echo_reply(user_message: str, profile_context: str, memory_context: str, ad
 
 async def generate_reply_stream(user_message: str, profile_context: str = "", history: list[dict] = [],
                                 memory_context: str = "", adaptation: str = "", deep_thinking: bool = False,
-                                reasoning: str | None = None, max_tokens: int | None = None):
+                                reasoning: str | None = None, max_tokens: int | None = None,
+                                own_creds: list[tuple[str, str, str]] | None = None):
     """Same chain as generate_reply, but yields text chunks as they arrive.
 
     Falls through to the next link only when a link fails BEFORE its first
     chunk — once text is flowing the stream is committed (never restarts).
     """
-    links: list[tuple[str, str, str]] = []
+    links: list[tuple[str, str, str]] = list(own_creds or [])
     if settings.openai_base_url and settings.openai_api_key:
         links.append((settings.openai_base_url, settings.openai_api_key, settings.openai_model))
     if settings.groq_api_key:

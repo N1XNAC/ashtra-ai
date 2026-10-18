@@ -1,6 +1,6 @@
 import uuid
 from datetime import datetime
-from sqlalchemy import Column, String, Text, DateTime, ForeignKey, JSON, Boolean, Integer
+from sqlalchemy import Column, String, Text, DateTime, ForeignKey, JSON, Boolean, Integer, UniqueConstraint
 from sqlalchemy.orm import relationship
 from .database import Base
 
@@ -173,5 +173,24 @@ class AnswerThread(Base):
     followups = Column(Text, nullable=False, default="[]")  # JSON list
     focus = Column(String, default="all")
     created_at = Column(DateTime, default=datetime.utcnow)
+
+    user = relationship("User")
+
+
+class UserApiKey(Base):
+    # BYOK (Bring Your Own Key) — user-supplied provider credentials.
+    # SQLite on Render free tier has no KMS, so keys are stored plaintext in
+    # the DB (documented limitation). Never returned whole in API responses —
+    # only masked (last 4 chars). Used first in the LLM chain for this user.
+    __tablename__ = "user_api_keys"
+    __table_args__ = (UniqueConstraint("user_id", "provider", name="uq_user_provider"),)
+    id = Column(String, primary_key=True, default=uid)
+    user_id = Column(String, ForeignKey("users.id"), nullable=False, index=True)
+    provider = Column(String, nullable=False)  # groq | openrouter
+    api_key = Column(String, nullable=False)
+    model = Column(String, nullable=True)  # user's preferred model for this provider
+    last_error = Column(String, nullable=True)  # last live-test failure (honest status)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
     user = relationship("User")
