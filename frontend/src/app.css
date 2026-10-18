@@ -739,21 +739,21 @@ input[type="range"] { width: 100%; accent-color: var(--accent); }
 .dp-sub { color: var(--faint); font-size: 12px; }
 /* mobile drawer bottom: layered fade + floating New Chat pill and avatar (desktop hides) */
 .drawer-fade, .drawer-bottom { display: none; }
-.drawer-bottom { align-items: center; justify-content: space-between; gap: 10px; padding: 10px 4px 2px; }
+.drawer-bottom { align-items: center; justify-content: space-between; gap: 10px; padding: 8px 6px 2px; }
 .drawer-fab {
-  display: flex; align-items: center; justify-content: center; gap: 8px;
-  width: 60%; min-height: 56px; border: 0; cursor: pointer;
+  display: flex; align-items: center; justify-content: center; gap: 7px;
+  width: 52%; min-height: 44px; border: 0; cursor: pointer;
   border-radius: var(--r-pill);
   background: linear-gradient(135deg, var(--azx-peach), var(--azx-blush));
-  color: var(--azx-text); font-size: 15px; font-weight: 600;
-  box-shadow: 0 6px 18px rgba(240,143,134,.28);
+  color: var(--azx-text); font-size: 13.5px; font-weight: 600;
+  box-shadow: 0 4px 14px rgba(240,143,134,.24);
   transition: transform .18s var(--press);
 }
 .drawer-fab:active { transform: scale(.97); }
 .drawer-ava {
-  width: 62px; height: 62px; border-radius: 50%; flex: none; cursor: pointer; padding: 0;
-  border: 2.5px solid var(--azx-coral-deep); background: var(--azx-ink); color: var(--azx-ivory);
-  display: flex; align-items: center; justify-content: center; font-size: 22px; font-weight: 700;
+  width: 44px; height: 44px; border-radius: 50%; flex: none; cursor: pointer; padding: 0;
+  border: 2px solid var(--azx-coral-deep); background: var(--azx-ink); color: var(--azx-ivory);
+  display: flex; align-items: center; justify-content: center; font-size: 15px; font-weight: 700;
   overflow: hidden; box-shadow: var(--azx-shadow-soft);
   transition: transform .15s var(--press);
 }

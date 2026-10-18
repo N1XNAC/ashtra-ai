@@ -129,3 +129,32 @@ def health():
                                                "goal_create", "goal_list", "goal_done", "goal_progress"],
             "local_model": True, "knowledge_graph": True, "goals": True, "long_term_learning": True,
             "llm": active_provider()}
+
+# TEMPORARY (remove after diagnosing prod 500s): inspect user_profiles schema
+# + the real exception behind profile/chat failures. Never returns credentials.
+@app.get("/debug/dbinfo")
+def debug_dbinfo():
+    import traceback
+    from .database import SessionLocal
+    out: list[str] = [f"dialect={engine.dialect.name}"]
+    try:
+        with engine.connect() as c:
+            if engine.dialect.name == "sqlite":
+                cols = [r[1] for r in c.execute(text("PRAGMA table_info(user_profiles)"))]
+            else:
+                cols = [r[0] for r in c.execute(text(
+                    "SELECT column_name FROM information_schema.columns "
+                    "WHERE table_name = 'user_profiles'"))]
+            out.append(f"user_profiles cols: {cols}")
+    except Exception as e:
+        out.append(f"schema probe failed: {type(e).__name__}: {e}")
+    try:
+        db = SessionLocal()
+        try:
+            row = db.query(models.UserProfile).filter_by(user_id="master-001").first()
+            out.append(f"row found: {bool(row)}")
+        finally:
+            db.close()
+    except Exception:
+        out.append("query traceback:\n" + traceback.format_exc()[-1200:])
+    return {"out": out}

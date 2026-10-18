@@ -1187,7 +1187,7 @@ function Sidebar({ view, setView, convId, setConvId, convs, onNew, onDelete, onD
         <div className="drawer-fade" aria-hidden="true" />
         <div className="drawer-bottom">
           <button className="drawer-fab" onClick={() => { onNew(); close() }}>
-            <Icon name="pen" size={21} /><span>New Chat</span>
+            <Icon name="pen" size={18} /><span>New Chat</span>
           </button>
           <button className="drawer-ava" aria-label="Your profile" onClick={() => { onProfile(); close() }}>
             {avatar ? <img src={avatar} alt="" /> : <span>{(name || 'P').slice(0, 1).toUpperCase()}</span>}

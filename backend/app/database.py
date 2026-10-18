@@ -60,25 +60,24 @@ def ensure_phase3_columns():
     for table, new_cols in migrations.items():
         with engine.connect() as conn:
             try:
-                existing = {r[1] for r in conn.execute(text(f"PRAGMA table_info({table})"))} \
-                    if engine.dialect.name == "sqlite" else None
-            except Exception:
-                existing = None
-            if existing is None:  # postgres path: try add, ignore if exists
-                for col, ddl in new_cols.items():
-                    try:
-                        conn.execute(text(f"ALTER TABLE {table} ADD COLUMN {col} {ddl}"))
-                    except Exception:
-                        pass
-                try:
-                    conn.commit()
-                except Exception:
-                    pass
-                continue
+                if engine.dialect.name == "sqlite":
+                    existing = {r[1] for r in conn.execute(text(f"PRAGMA table_info({table})"))}
+                else:
+                    rows = conn.execute(text(
+                        "SELECT column_name FROM information_schema.columns "
+                        "WHERE table_name = :t"), {"t": table}).fetchall()
+                    existing = {r[0] for r in rows}
+            except Exception as e:
+                print(f"WARNING: column probe failed for {table}: {type(e).__name__}: {e}")
+                existing = set()
             for col, ddl in new_cols.items():
                 if col not in existing:
-                    conn.execute(text(f"ALTER TABLE {table} ADD COLUMN {col} {ddl}"))
+                    try:
+                        conn.execute(text(f"ALTER TABLE {table} ADD COLUMN {col} {ddl}"))
+                        print(f"migration: added {table}.{col}")
+                    except Exception as e:
+                        print(f"WARNING: ALTER {table}.{col} failed: {type(e).__name__}: {e}")
             try:
                 conn.commit()
-            except Exception:
-                pass
+            except Exception as e:
+                print(f"WARNING: migration commit failed for {table}: {type(e).__name__}: {e}")
